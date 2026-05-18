@@ -164,12 +164,14 @@
     <main id="image-panel">
       <div id="image-display">
         <!-- Live preview or selected image -->
-        <img x-show="displaySrc" :src="displaySrc" id="main-image" alt="Generated image">
+        <img x-show="displaySrc" :src="displaySrc" id="main-image"
+             :class="{'is-loading': imageLoading}"
+             alt="Generated image">
         <div id="no-image-placeholder" x-show="!displaySrc">
           <p>Generate an image or select one from the gallery.</p>
         </div>
 
-        <!-- Preview progress bar -->
+        <!-- Preview progress bar (shown during generation only) -->
         <div id="progress-bar" x-show="previewProgress > 0 && previewProgress < 1">
           <div id="progress-fill" :style="`width: ${previewProgress * 100}%`"></div>
         </div>
@@ -236,5 +238,7 @@
 
 </body>
 </html>
+
+
 
 

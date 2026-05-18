@@ -18,25 +18,20 @@ function app() {
     models: [],
     selectedImageName: null,
     selectedImageMeta: null,
-    previewSrc: null,
+    displaySrc: null,       // what is shown in the image panel right now
+    imageLoading: false,    // true while the full-res image is fetching
     previewProgress: 0,
     queueItems: [],
     errorMessage: null,
     localScanPath: '',
     candidates: [],
 
-    get displaySrc() {
-      // Show preview during generation, otherwise show selected image
-      if (this.previewProgress > 0 && this.previewProgress < 1) return this.previewSrc;
-      if (this.selectedImageName) return `/api/v1/images/i/${this.selectedImageName}/full`;
-      return this.previewSrc;
-    },
-
     async init() {
       await this.loadModels();
       this.setupKeyboardShortcuts();
+      // Preview frames fill displaySrc directly; progress bar tracks steps
       connectPreview(({ image_b64, step, total_steps }) => {
-        this.previewSrc = `data:image/jpeg;base64,${image_b64}`;
+        this.displaySrc = `data:image/jpeg;base64,${image_b64}`;
         this.previewProgress = total_steps > 0 ? step / total_steps : 0;
       });
     },
@@ -143,8 +138,28 @@ function app() {
     },
 
     selectImageFromEvent(event) {
-      this.selectedImageName = event.detail.imageName;
-      this._loadImageMeta(event.detail.imageName);
+      const { imageName } = event.detail;
+      this.selectedImageName = imageName;
+      this._loadImageMeta(imageName);
+
+      // (a) Immediately show thumbnail magnified to fill the frame
+      this.imageLoading = true;
+      this.displaySrc = `/api/v1/images/i/${imageName}/thumbnail`;
+
+      // Prefetch the full image off-screen; swap in once decoded
+      const fullUrl = `/api/v1/images/i/${imageName}/full`;
+      const img = new Image();
+      img.onload = () => {
+        // Guard: user may have clicked a different image while this was loading
+        if (this.selectedImageName === imageName) {
+          this.displaySrc = fullUrl;
+          this.imageLoading = false;
+        }
+      };
+      img.onerror = () => {
+        this.imageLoading = false;
+      };
+      img.src = fullUrl;
     },
 
     async _loadImageMeta(imageName) {
@@ -278,4 +293,7 @@ function app() {
     },
   };
 }
+
+
+
 
