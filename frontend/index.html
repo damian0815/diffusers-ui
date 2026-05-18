@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>diffusers-ui</title>
+  <!-- Component scripts must be defined before Alpine initializes -->
+  <script src="/app.js" defer></script>
+  <script src="/gallery.js" defer></script>
+  <script src="/preview.js" defer></script>
+  <!-- Alpine.js last — so app(), gallery(), connectPreview() are already in scope -->
+  <script src="/vendor/alpine.min.js" defer></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body x-data="app()" x-on:select-image.window="selectImageFromEvent($event)">
+
+  <!-- Error banner -->
+  <div id="error-banner" x-show="errorMessage" x-transition>
+    <span x-text="errorMessage"></span>
+    <button @click="errorMessage = null">&times;</button>
+  </div>
+
+  <div id="layout">
+
+    <!-- ===================== LEFT: Controls ===================== -->
+    <aside id="controls-panel">
+      <h2 class="panel-title">Generate</h2>
+
+      <!-- Prompt -->
+      <label class="field-label">Prompt</label>
+      <textarea id="prompt" x-model="prompt" rows="4" placeholder="Describe your image…"></textarea>
+
+      <!-- Negative Prompt -->
+      <label class="field-label">Negative Prompt</label>
+      <textarea id="negative-prompt" x-model="negativePrompt" rows="2"
+                placeholder="What to avoid…"></textarea>
+
+      <!-- Model -->
+      <label class="field-label">Model</label>
+      <select x-model="modelKey">
+        <template x-for="m in models" :key="m.key">
+          <option :value="m.key" x-text="m.name"></option>
+        </template>
+        <option value="" x-show="models.length === 0" disabled>No models registered</option>
+      </select>
+
+      <!-- Seed -->
+      <div class="row">
+        <div class="field">
+          <label class="field-label">Seed <small>(-1 = random)</small></label>
+          <input type="number" x-model.number="seed" min="-1" max="4294967295">
+        </div>
+        <button class="icon-btn" title="Randomize seed" @click="seed = -1">🎲</button>
+      </div>
+
+      <!-- Width / Height -->
+      <div class="row">
+        <div class="field">
+          <label class="field-label">Width</label>
+          <input type="number" x-model.number="width" step="64" min="256" max="2048">
+        </div>
+        <div class="field">
+          <label class="field-label">Height</label>
+          <input type="number" x-model.number="height" step="64" min="256" max="2048">
+        </div>
+      </div>
+
+      <!-- Steps / CFG -->
+      <div class="row">
+        <div class="field">
+          <label class="field-label">Steps</label>
+          <input type="number" x-model.number="steps" min="1" max="150">
+        </div>
+        <div class="field">
+          <label class="field-label">CFG</label>
+          <input type="number" x-model.number="cfg" step="0.5" min="1" max="30">
+        </div>
+      </div>
+
+      <!-- CFG Rescale / Sampler -->
+      <div class="row">
+        <div class="field">
+          <label class="field-label">CFG Rescale</label>
+          <input type="number" x-model.number="cfgRescale" step="0.05" min="0" max="1">
+        </div>
+        <div class="field">
+          <label class="field-label">Sampler</label>
+          <select x-model="sampler">
+            <option value="dpmpp_2m">DPM++ 2M</option>
+            <option value="dpmpp_2m_sde">DPM++ 2M SDE</option>
+            <option value="dpmpp_sde">DPM++ SDE</option>
+            <option value="euler">Euler</option>
+            <option value="euler_a">Euler A</option>
+            <option value="euler_fm_dynshift">Euler Flow Matching dynamic shift</option>
+            <option value="ddim">DDIM</option>
+            <option value="lms">LMS</option>
+            <option value="dpmpp_3m">DPM++ 3M</option>
+            <option value="kdpm_2_a">KDPM2 A</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Generate buttons -->
+      <div class="row generate-row">
+        <button class="btn-primary" @click="generate(false)"
+                title="Generate (⌘+Enter)">
+          ▶ Generate
+        </button>
+        <button class="btn-secondary" @click="generate(true)"
+                title="Generate next (⌘+Shift+Enter)">
+          ⏫ Priority
+        </button>
+      </div>
+
+      <!-- Queue status -->
+      <div id="queue-status" x-show="queueItems.length > 0">
+        <span x-text="`Queue: ${queueItems.length} item(s)`"></span>
+        <button class="link-btn" @click="clearQueue()">Clear</button>
+      </div>
+
+      <!-- ===================== Models Management ===================== -->
+      <details id="models-section">
+        <summary class="panel-title" style="cursor:pointer">⚙ Models</summary>
+
+        <!-- Registered models list -->
+        <div id="models-list">
+          <template x-for="m in models" :key="m.key">
+            <div class="model-entry">
+              <span class="model-name" x-text="m.name"></span>
+              <small class="model-base" x-text="m.base"></small>
+              <button class="icon-btn danger" title="Delete model"
+                      @click="deleteModel(m.key)">🗑</button>
+            </div>
+          </template>
+          <p x-show="models.length === 0" class="hint">No models registered.</p>
+        </div>
+
+        <!-- Scan HF cache -->
+        <button class="btn-secondary" @click="scanHfCache()">🔍 Scan HF Cache</button>
+
+        <!-- Add local path -->
+        <div class="row" style="margin-top:8px">
+          <input type="text" x-model="localScanPath" placeholder="/path/to/models">
+          <button class="btn-secondary" @click="scanLocalDir()">📁 Scan Dir</button>
+        </div>
+
+        <!-- Candidates modal (shown after scan) -->
+        <div x-show="candidates.length > 0" id="candidates-list">
+          <h4>Candidates</h4>
+          <template x-for="(c, idx) in candidates" :key="idx">
+            <div class="candidate-entry">
+              <span x-text="c.name"></span>
+              <small x-text="c.base"></small>
+              <small x-text="c.source"></small>
+              <button class="btn-secondary" @click="registerCandidate(c)">+ Register</button>
+            </div>
+          </template>
+          <button class="link-btn" @click="candidates = []">Dismiss</button>
+        </div>
+      </details>
+    </aside>
+
+    <!-- ===================== MIDDLE: Image display ===================== -->
+    <main id="image-panel">
+      <div id="image-display">
+        <!-- Live preview or selected image -->
+        <img x-show="displaySrc" :src="displaySrc" id="main-image" alt="Generated image">
+        <div id="no-image-placeholder" x-show="!displaySrc">
+          <p>Generate an image or select one from the gallery.</p>
+        </div>
+
+        <!-- Preview progress bar -->
+        <div id="progress-bar" x-show="previewProgress > 0 && previewProgress < 1">
+          <div id="progress-fill" :style="`width: ${previewProgress * 100}%`"></div>
+        </div>
+      </div>
+
+      <!-- Adopt bar — applies settings from the selected image -->
+      <div id="adopt-bar" x-show="selectedImageMeta">
+        <span class="adopt-label">Adopt:</span>
+        <button class="adopt-btn" @click="adoptSettings('prompt')"     title="⌘1">Prompt</button>
+        <button class="adopt-btn" @click="adoptSettings('size')"       title="⌘2">Size</button>
+        <button class="adopt-btn" @click="adoptSettings('model')"      title="⌘3">Model</button>
+        <button class="adopt-btn" @click="adoptSettings('seed')"       title="⌘4">Seed</button>
+        <button class="adopt-btn" @click="adoptSettings('steps')"      title="⌘5">Steps</button>
+        <button class="adopt-btn" @click="adoptSettings('all')"        title="⌘6">All</button>
+        <button class="icon-btn" @click="toggleStar()" :title="selectedImageMeta?.starred ? 'Unstar' : 'Star'">
+          <span x-text="selectedImageMeta?.starred ? '⭐' : '☆'"></span>
+        </button>
+      </div>
+    </main>
+
+    <!-- ===================== RIGHT: Gallery ===================== -->
+    <aside id="gallery-panel" x-data="gallery()" x-on:select-image.window="handleExternalSelect($event)">
+      <!-- Board list -->
+      <div id="gallery-list">
+        <div class="row">
+          <select id="board-select" x-model="selectedBoardId" @change="onBoardChange()">
+            <template x-for="g in galleries" :key="g.board_id">
+              <option :value="g.board_id" x-text="g.name"></option>
+            </template>
+          </select>
+          <button class="icon-btn" title="New gallery" @click="createGallery()">+</button>
+        </div>
+
+        <!-- Search -->
+        <div class="row" style="margin-top:8px">
+          <input type="text" x-model="search" placeholder="Search prompts…"
+                 @input.debounce.400ms="resetAndLoad()">
+          <label class="checkbox-label">
+            <input type="checkbox" x-model="starredOnly" @change="resetAndLoad()"> ⭐
+          </label>
+        </div>
+      </div>
+
+      <!-- Image thumbnails grid -->
+      <div id="gallery-contents">
+        <div id="thumbnail-grid">
+          <template x-for="img in images" :key="img.image_name">
+            <div class="thumb-wrapper" :class="{selected: selectedImageName === img.image_name}"
+                 @click="selectImage(img.image_name)">
+              <img :src="`/api/v1/images/i/${img.image_name}/thumbnail`"
+                   :alt="img.prompt" loading="lazy">
+              <span x-show="img.starred" class="star-badge">⭐</span>
+            </div>
+          </template>
+        </div>
+        <!-- Infinite scroll sentinel -->
+        <div id="gallery-sentinel"></div>
+        <p x-show="loading" class="hint">Loading…</p>
+        <p x-show="!hasMore && images.length === 0" class="hint">No images yet.</p>
+      </div>
+    </aside>
+
+  </div><!-- #layout -->
+
+</body>
+</html>
+
+

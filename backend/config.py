@@ -1,0 +1,34 @@
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _detect_device() -> str:
+    """Auto-detect the best available compute device."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except ImportError:
+        pass
+    return "cpu"
+
+
+@dataclass
+class Settings:
+    host: str = "127.0.0.1"
+    port: int = 8765
+    images_dir: Path = field(default_factory=lambda: Path("images"))
+    thumbnails_dir: Path = field(default_factory=lambda: Path("images/thumbs"))
+    models_json: Path = field(default_factory=lambda: Path("models.json"))
+    db_url: str = "sqlite+aiosqlite:///gallery.db"
+    thumbnail_size: tuple[int, int] = (256, 256)
+    batch_window_s: float = 0.3   # how long to wait collecting items before batching
+    preview_every_n_steps: int = 5
+    device: str = field(default_factory=_detect_device)
+
+
+# Singleton — import this everywhere
+settings = Settings()
+

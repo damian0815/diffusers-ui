@@ -1,0 +1,14 @@
+fastapi>=0.111
+uvicorn[standard]>=0.29
+diffusers>=0.26
+transformers>=4.40
+accelerate>=0.30
+Pillow>=10.0
+sqlalchemy[asyncio]>=2.0
+aiosqlite>=0.20
+alembic>=1.13
+huggingface_hub>=0.22
+pydantic>=2.0
+pydantic-settings>=2.0
+tqdm
+
