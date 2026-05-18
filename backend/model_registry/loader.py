@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+
+import torch
+
 from backend.config import settings
 from backend.domain import ModelEntry
 
@@ -28,9 +32,10 @@ class PipelineLoader:
             kwargs: dict = {"torch_dtype": _dtype_for_device(settings.device)}
             if entry.hf_api_key:
                 kwargs["token"] = entry.hf_api_key
+            logging.info(f"Loading model {entry.name} from {entry.source} onto {settings.device} @{settings.dtype}")
             self._pipeline = DiffusionPipeline.from_pretrained(
                 entry.source, **kwargs
-            ).to(settings.device)
+            ).to(device=settings.device, dtype=settings.dtype)
             self._loaded_key = entry.key
         except Exception as exc:
             raise PipelineLoadError(

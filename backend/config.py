@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import torch
+
 
 def _detect_device() -> str:
     """Auto-detect the best available compute device."""
@@ -27,6 +29,17 @@ class Settings:
     batch_window_s: float = 0.3   # how long to wait collecting items before batching
     preview_every_n_steps: int = 5
     device: str = field(default_factory=_detect_device)
+
+    @property
+    def dtype(self) -> torch.dtype:
+        if self.device == "cuda":
+            return torch.bfloat16
+        elif self.device == "mps":
+            return torch.float32
+        elif self.device == "cpu":
+            return torch.float16
+        else:
+            raise NotImplementedError(f"Unhandled device {self.device}")
 
 
 # Singleton — import this everywhere

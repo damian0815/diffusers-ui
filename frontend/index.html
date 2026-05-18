@@ -4,11 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>diffusers-ui</title>
-  <!-- Component scripts must be defined before Alpine initializes -->
-  <script src="/app.js" defer></script>
+  <script src="/app.js"     defer></script>
   <script src="/gallery.js" defer></script>
   <script src="/preview.js" defer></script>
-  <!-- Alpine.js last — so app(), gallery(), connectPreview() are already in scope -->
+  <script src="/layout.js"  defer></script>
   <script src="/vendor/alpine.min.js" defer></script>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -22,246 +21,410 @@
 
   <div id="layout">
 
-    <!-- ===================== LEFT: Controls ===================== -->
+    <!-- ═══════════════ LEFT: Controls ═══════════════ -->
     <aside id="controls-panel">
 
-      <!-- Generate buttons — always at the top -->
-      <div class="row generate-row">
-        <button class="btn-primary" @click="generate(false)" title="Generate  ⌘↩">
-          ▶ Generate
-        </button>
-        <button class="icon-btn generate-priority" @click="generate(true)"
-                title="Front of queue  ⌘⇧↩">⏫</button>
+      <!-- Collapsed strip (visible only when panel is collapsed) -->
+      <div class="collapsed-strip">
+        <button class="expand-btn" onclick="Layout.toggleLeft()" title="Expand params  ·  T">&#8250;</button>
+        <span class="collapsed-label">PARAMS</span>
       </div>
 
-      <!-- Queue status (below generate) -->
-      <div id="queue-status" x-show="queueItems.length > 0">
-        <span x-text="`Queue: ${queueItems.length} item(s)`"></span>
-        <button class="link-btn" @click="clearQueue()">Clear</button>
-      </div>
+      <!-- Full panel content -->
+      <div class="panel-inner">
 
-      <!-- Prompt -->
-      <label class="field-label">Prompt</label>
-      <textarea id="prompt" x-model="prompt" rows="4" placeholder="Describe your image…"></textarea>
-
-      <!-- Negative Prompt -->
-      <label class="field-label">Negative Prompt</label>
-      <textarea id="negative-prompt" x-model="negativePrompt" rows="2"
-                placeholder="What to avoid…"></textarea>
-
-      <!-- Model -->
-      <label class="field-label">Model</label>
-      <select x-model="modelKey">
-        <template x-for="m in models" :key="m.key">
-          <option :value="m.key" x-text="m.name"></option>
-        </template>
-        <option value="" x-show="models.length === 0" disabled>No models registered</option>
-      </select>
-
-      <!-- Seed -->
-      <div class="row">
-        <div class="field">
-          <label class="field-label">Seed <small>(-1 = random)</small></label>
-          <input type="number" x-model.number="seed" min="-1" max="4294967295">
+        <!-- Tab bar -->
+        <div id="tab-bar">
+          <button class="tab-btn" :class="{active: activeTab==='generate'}"
+                  @click="activeTab='generate'" title="Generate tab  ·  1">
+            Generate
+          </button>
+          <button class="tab-btn" :class="{active: activeTab==='models'}"
+                  @click="activeTab='models'" title="Models tab  ·  5">
+            Models
+          </button>
+          <button class="tab-collapse-btn" onclick="Layout.toggleLeft()" title="Collapse params  ·  T">&#8249;</button>
         </div>
-        <button class="icon-btn" title="Randomize seed" @click="seed = -1">🎲</button>
-      </div>
 
-      <!-- Width / Height + lock aspect ratio -->
-      <div class="row">
-        <div class="field">
-          <label class="field-label">Width</label>
-          <input type="number" x-model.number="width" step="64" min="256" max="2048">
-        </div>
-        <div class="field">
-          <label class="field-label">Height</label>
-          <input type="number" x-model.number="height" step="64" min="256" max="2048">
-        </div>
-        <button class="icon-btn ar-lock" :class="{'active': lockAspectRatio}"
-                @click="toggleLockAspectRatio()"
-                :title="lockAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio'">🔒</button>
-      </div>
+        <!-- ── TAB: Generate ── -->
+        <div class="tab-content" x-show="activeTab === 'generate'">
 
-      <!-- Aspect ratio presets -->
-      <select x-model="selectedAspectRatio"
-              @change="onAspectRatioSelect($event.target.value)"
-              class="ar-select">
-        <option value="custom">── Custom ──</option>
-        <option value="1:1">1∶1  Square</option>
-        <option value="5:4">5∶4</option>
-        <option value="4:3">4∶3</option>
-        <option value="3:2">3∶2  Landscape</option>
-        <option value="16:9">16∶9  Wide</option>
-        <option value="4:5">4∶5</option>
-        <option value="3:4">3∶4</option>
-        <option value="2:3">2∶3  Portrait</option>
-        <option value="9:16">9∶16  Story</option>
-      </select>
+          <div class="row generate-row">
+            <button class="btn-primary" @click="generate(false)" title="Generate  ·  ⌘↩">
+              ▶ Generate
+            </button>
+            <button class="icon-btn generate-priority" @click="generate(true)"
+                    title="Front of queue  ·  ⌘⇧↩">⏫</button>
+          </div>
 
-      <!-- Steps / CFG -->
-      <div class="row">
-        <div class="field">
-          <label class="field-label">Steps</label>
-          <input type="number" x-model.number="steps" min="1" max="150">
-        </div>
-        <div class="field">
-          <label class="field-label">CFG</label>
-          <input type="number" x-model.number="cfg" step="0.5" min="1" max="30">
-        </div>
-      </div>
+          <div id="queue-status" x-show="queueItems.length > 0">
+            <span x-text="`Queue: ${queueItems.length}`"></span>
+            <button class="link-btn" @click="clearQueue()">Clear</button>
+          </div>
 
-      <!-- CFG Rescale / Sampler -->
-      <div class="row">
-        <div class="field">
-          <label class="field-label">CFG Rescale</label>
-          <input type="number" x-model.number="cfgRescale" step="0.05" min="0" max="1">
-        </div>
-        <div class="field">
-          <label class="field-label">Sampler</label>
-          <select x-model="sampler">
-            <option value="dpmpp_2m">DPM++ 2M</option>
-            <option value="dpmpp_2m_sde">DPM++ 2M SDE</option>
-            <option value="dpmpp_sde">DPM++ SDE</option>
-            <option value="euler">Euler</option>
-            <option value="euler_a">Euler A</option>
-            <option value="euler_fm_dynshift">Euler Flow Matching dynamic shift</option>
-            <option value="ddim">DDIM</option>
-            <option value="lms">LMS</option>
-            <option value="dpmpp_3m">DPM++ 3M</option>
-            <option value="kdpm_2_a">KDPM2 A</option>
+          <label class="checkbox-label option-row">
+            <input type="checkbox" x-model="autoSelectLatest">
+            Auto-select latest image
+          </label>
+
+          <div class="field-group">
+            <label class="field-label">Prompt</label>
+            <textarea x-model="prompt" rows="4" placeholder="Describe your image…"></textarea>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Negative Prompt</label>
+            <textarea x-model="negativePrompt" rows="2" placeholder="What to avoid…"></textarea>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Model</label>
+            <select x-model="modelKey">
+              <template x-for="m in models" :key="m.key">
+                <option :value="m.key" x-text="m.name"></option>
+              </template>
+              <option value="" x-show="models.length === 0" disabled>No models registered — go to Models tab</option>
+            </select>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label class="field-label">Seed <small>(-1 = random)</small></label>
+              <input type="number" x-model.number="seed" min="-1" max="4294967295">
+            </div>
+            <button class="icon-btn" title="Randomise  ·  🎲" @click="seed = -1">🎲</button>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label class="field-label">Width</label>
+              <input type="number" x-model.number="width" step="64" min="256" max="2048">
+            </div>
+            <div class="field">
+              <label class="field-label">Height</label>
+              <input type="number" x-model.number="height" step="64" min="256" max="2048">
+            </div>
+            <button class="icon-btn ar-lock" :class="{active: lockAspectRatio}"
+                    @click="toggleLockAspectRatio()"
+                    :title="lockAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio  ·  🔒'">🔒</button>
+          </div>
+
+          <select x-model="selectedAspectRatio"
+                  @change="onAspectRatioSelect($event.target.value)"
+                  class="ar-select">
+            <option value="custom">── Custom ──</option>
+            <option value="1:1">1∶1  Square</option>
+            <option value="5:4">5∶4</option>
+            <option value="4:3">4∶3</option>
+            <option value="3:2">3∶2  Landscape</option>
+            <option value="16:9">16∶9  Wide</option>
+            <option value="4:5">4∶5</option>
+            <option value="3:4">3∶4</option>
+            <option value="2:3">2∶3  Portrait</option>
+            <option value="9:16">9∶16  Story</option>
           </select>
-        </div>
-      </div>
 
-      <!-- ===================== Models Management ===================== -->
-      <details id="models-section">
-        <summary class="panel-title" style="cursor:pointer">⚙ Models</summary>
-
-        <!-- Registered models list -->
-        <div id="models-list">
-          <template x-for="m in models" :key="m.key">
-            <div class="model-entry">
-              <span class="model-name" x-text="m.name"></span>
-              <small class="model-base" x-text="m.base"></small>
-              <button class="icon-btn danger" title="Delete model"
-                      @click="deleteModel(m.key)">🗑</button>
+          <div class="row">
+            <div class="field">
+              <label class="field-label">Steps</label>
+              <input type="number" x-model.number="steps" min="1" max="150">
             </div>
-          </template>
-          <p x-show="models.length === 0" class="hint">No models registered.</p>
-        </div>
-
-        <!-- Scan HF cache -->
-        <button class="btn-secondary" @click="scanHfCache()">🔍 Scan HF Cache</button>
-
-        <!-- Add local path -->
-        <div class="row" style="margin-top:8px">
-          <input type="text" x-model="localScanPath" placeholder="/path/to/models">
-          <button class="btn-secondary" @click="scanLocalDir()">📁 Scan Dir</button>
-        </div>
-
-        <!-- Candidates modal (shown after scan) -->
-        <div x-show="candidates.length > 0" id="candidates-list">
-          <h4>Candidates</h4>
-          <template x-for="(c, idx) in candidates" :key="idx">
-            <div class="candidate-entry">
-              <span x-text="c.name"></span>
-              <small x-text="c.base"></small>
-              <small x-text="c.source"></small>
-              <button class="btn-secondary" @click="registerCandidate(c)">+ Register</button>
+            <div class="field">
+              <label class="field-label">CFG</label>
+              <input type="number" x-model.number="cfg" step="0.5" min="1" max="30">
             </div>
-          </template>
-          <button class="link-btn" @click="candidates = []">Dismiss</button>
-        </div>
-      </details>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label class="field-label">CFG Rescale</label>
+              <input type="number" x-model.number="cfgRescale" step="0.05" min="0" max="1">
+            </div>
+            <div class="field">
+              <label class="field-label">Sampler</label>
+              <select x-model="sampler">
+                <option value="dpmpp_2m">DPM++ 2M</option>
+                <option value="dpmpp_2m_sde">DPM++ 2M SDE</option>
+                <option value="dpmpp_sde">DPM++ SDE</option>
+                <option value="euler">Euler</option>
+                <option value="euler_a">Euler A</option>
+                <option value="ddim">DDIM</option>
+                <option value="lms">LMS</option>
+                <option value="dpmpp_3m">DPM++ 3M</option>
+                <option value="kdpm_2_a">KDPM2 A</option>
+              </select>
+            </div>
+          </div>
+
+        </div><!-- /tab-generate -->
+
+        <!-- ── TAB: Models ── -->
+        <div class="tab-content" x-show="activeTab === 'models'">
+
+          <div id="models-list">
+            <template x-for="m in models" :key="m.key">
+              <div class="model-entry">
+                <div class="model-info">
+                  <span class="model-name" x-text="m.name"></span>
+                  <span class="model-base" x-text="m.base"></span>
+                </div>
+                <button class="icon-btn danger" title="Delete model" @click="deleteModel(m.key)">🗑</button>
+              </div>
+            </template>
+            <p x-show="models.length === 0" class="hint">No models registered yet.</p>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <p class="field-label" style="margin-bottom:6px">Discover models</p>
+
+          <button class="btn-secondary full-width" @click="scanHfCache()">
+            🔍 Scan HF Cache
+          </button>
+
+          <div class="row" style="margin-top:8px">
+            <input type="text" x-model="localScanPath" placeholder="/path/to/local/models">
+            <button class="btn-secondary" @click="scanLocalDir()">📁 Scan Dir</button>
+          </div>
+
+          <div x-show="candidates.length > 0" id="candidates-list">
+            <p class="field-label" style="margin-bottom:6px">Candidates</p>
+            <template x-for="(c, idx) in candidates" :key="idx">
+              <div class="candidate-entry">
+                <div class="candidate-info">
+                  <span x-text="c.name"></span>
+                  <small x-text="c.source" class="text-muted-truncate"></small>
+                </div>
+                <button class="btn-secondary" @click="registerCandidate(c)">+ Add</button>
+              </div>
+            </template>
+            <button class="link-btn" @click="candidates = []">Dismiss all</button>
+          </div>
+
+        </div><!-- /tab-models -->
+
+      </div><!-- /panel-inner -->
     </aside>
 
-    <!-- ===================== MIDDLE: Image display ===================== -->
+    <!-- Drag handle (left) -->
+    <div class="resize-handle" id="left-handle" title="Drag to resize"></div>
+
+    <!-- ═══════════════ MIDDLE: Image ═══════════════ -->
     <main id="image-panel">
+
+      <!-- Adopt bar at TOP of image panel -->
+      <div id="adopt-bar" x-show="selectedImageMeta">
+        <span class="adopt-label">Adopt:</span>
+        <button class="adopt-btn" @click="adoptSettings('prompt')" title="Use prompt  ·  P">Prompt</button>
+        <button class="adopt-btn" @click="adoptSettings('size')"   title="Use size  ·  D">Size</button>
+        <button class="adopt-btn" @click="adoptSettings('model')"  title="Use model">Model</button>
+        <button class="adopt-btn" @click="adoptSettings('seed')"   title="Use seed  ·  S">Seed</button>
+        <button class="adopt-btn" @click="adoptSettings('steps')"  title="Use steps/cfg/sampler">Steps</button>
+        <button class="adopt-btn" @click="adoptSettings('all')"    title="Use all params  ·  A">All</button>
+        <button class="icon-btn star-btn" @click="toggleStar()"
+                :title="selectedImageMeta?.starred ? 'Unstar' : 'Star'">
+          <span x-text="selectedImageMeta?.starred ? '⭐' : '☆'"></span>
+        </button>
+      </div>
+
       <div id="image-display">
-        <!-- Floating preview toggle -->
+        <!-- Preview toggle -->
         <button id="preview-toggle"
                 @click="togglePreview()"
-                :class="{'off': !showPreview}"
+                :class="{off: !showPreview}"
                 :title="showPreview ? 'Hide preview  ·  V' : 'Show preview  ·  V'">
           <span x-text="showPreview ? '👁' : '🙈'"></span>
         </button>
 
-        <!-- Live preview or selected image -->
+        <!-- Info overlay toggle -->
+        <button id="info-toggle"
+                @click="toggleInfoOverlay()"
+                :class="{active: showInfoOverlay}"
+                x-show="selectedImageMeta"
+                title="Image info  ·  I">ℹ</button>
+
+        <div id="info-overlay"
+             x-show="showInfoOverlay && selectedImageMeta"
+             x-transition:enter="info-enter"
+             x-transition:enter-start="info-enter-start"
+             x-transition:enter-end="info-enter-end"
+             x-transition:leave="info-enter"
+             x-transition:leave-start="info-enter-end"
+             x-transition:leave-end="info-enter-start">
+
+          <div class="info-overlay-header">
+            <span class="info-overlay-title">Image Info</span>
+            <button class="info-close-btn" @click="showInfoOverlay = false" title="Close  ·  I">&times;</button>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('prompt')" title="Use prompt">↩</button>
+            <div class="info-field">
+              <span class="info-label">Prompt</span>
+              <span class="info-value" x-text="selectedImageMeta?.prompt || '—'"></span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('negPrompt')" title="Use negative prompt">↩</button>
+            <div class="info-field">
+              <span class="info-label">Negative Prompt</span>
+              <span class="info-value" x-text="selectedImageMeta?.negative_prompt || '—'"></span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('model')" title="Use model">↩</button>
+            <div class="info-field">
+              <span class="info-label">Model</span>
+              <span class="info-value"
+                    x-text="models.find(m => m.key === selectedImageMeta?.model_key)?.name || selectedImageMeta?.model_key || '—'">
+              </span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('seed')" title="Use seed">↩</button>
+            <div class="info-field">
+              <span class="info-label">Seed</span>
+              <span class="info-value" x-text="selectedImageMeta?.seed ?? '—'"></span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('size')" title="Use size">↩</button>
+            <div class="info-field">
+              <span class="info-label">Size</span>
+              <span class="info-value"
+                    x-text="selectedImageMeta ? `${selectedImageMeta.width} × ${selectedImageMeta.height}` : '—'">
+              </span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('steps')" title="Use steps">↩</button>
+            <div class="info-field">
+              <span class="info-label">Steps</span>
+              <span class="info-value" x-text="selectedImageMeta?.steps ?? '—'"></span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('cfg')" title="Use CFG">↩</button>
+            <div class="info-field">
+              <span class="info-label">CFG</span>
+              <span class="info-value" x-text="selectedImageMeta?.cfg ?? '—'"></span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('cfgRescale')" title="Use CFG Rescale">↩</button>
+            <div class="info-field">
+              <span class="info-label">CFG Rescale</span>
+              <span class="info-value" x-text="selectedImageMeta?.cfg_rescale_multiplier ?? '—'"></span>
+            </div>
+          </div>
+
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('sampler')" title="Use sampler">↩</button>
+            <div class="info-field">
+              <span class="info-label">Sampler</span>
+              <span class="info-value" x-text="selectedImageMeta?.sampler || '—'"></span>
+            </div>
+          </div>
+
+        </div><!-- /info-overlay -->
+
         <img x-show="displaySrc" :src="displaySrc" id="main-image"
-             :class="{'is-loading': imageLoading}"
-             alt="Generated image">
+             :class="{'is-loading': imageLoading}" alt="">
+
         <div id="no-image-placeholder" x-show="!displaySrc">
-          <p>Generate an image or select one from the gallery.</p>
+          <div class="placeholder-inner">
+            <div class="placeholder-icon">⬡</div>
+            <p>Generate an image or select one from the gallery.</p>
+            <p class="placeholder-hint">⌘↩ to generate</p>
+          </div>
         </div>
 
-        <!-- Preview progress bar (shown during generation only) -->
         <div id="progress-bar" x-show="previewProgress > 0 && previewProgress < 1">
           <div id="progress-fill" :style="`width: ${previewProgress * 100}%`"></div>
         </div>
       </div>
 
-      <!-- Adopt bar — applies settings from the selected image -->
-      <div id="adopt-bar" x-show="selectedImageMeta">
-        <span class="adopt-label">Adopt:</span>
-        <button class="adopt-btn" @click="adoptSettings('prompt')" title="P">Prompt</button>
-        <button class="adopt-btn" @click="adoptSettings('size')"   title="D">Size</button>
-        <button class="adopt-btn" @click="adoptSettings('model')"  title="">Model</button>
-        <button class="adopt-btn" @click="adoptSettings('seed')"   title="S">Seed</button>
-        <button class="adopt-btn" @click="adoptSettings('steps')"  title="">Steps</button>
-        <button class="adopt-btn" @click="adoptSettings('all')"    title="A">All</button>
-        <button class="icon-btn" @click="toggleStar()" :title="selectedImageMeta?.starred ? 'Unstar' : 'Star'">
-          <span x-text="selectedImageMeta?.starred ? '⭐' : '☆'"></span>
-        </button>
-      </div>
     </main>
 
-    <!-- ===================== RIGHT: Gallery ===================== -->
-    <aside id="gallery-panel" x-data="gallery()" x-on:select-image.window="handleExternalSelect($event)">
-      <!-- Board list -->
-      <div id="gallery-list">
-        <div class="row">
-          <select id="board-select" x-model="selectedBoardId" @change="onBoardChange()">
-            <template x-for="g in galleries" :key="g.board_id">
-              <option :value="g.board_id" x-text="g.name"></option>
+    <!-- Drag handle (right) -->
+    <div class="resize-handle" id="right-handle" title="Drag to resize"></div>
+
+    <!-- ═══════════════ RIGHT: Gallery ═══════════════ -->
+    <aside id="gallery-panel"
+           x-data="gallery()"
+           x-on:select-image.window="handleExternalSelect($event)">
+
+      <!-- Collapsed strip -->
+      <div class="collapsed-strip">
+        <button class="expand-btn" onclick="Layout.toggleRight()" title="Expand gallery  ·  G">&#8249;</button>
+        <span class="collapsed-label">GALLERY</span>
+      </div>
+
+      <div class="panel-inner">
+
+        <!-- Gallery controls header -->
+        <div id="gallery-header">
+          <div class="row">
+            <select id="board-select" x-model="selectedBoardId" @change="onBoardChange()">
+              <template x-for="g in galleries" :key="g.board_id">
+                <option :value="g.board_id" x-text="g.name"></option>
+              </template>
+            </select>
+            <button class="icon-btn" title="New gallery" @click="createGallery()">+</button>
+            <button class="icon-btn" onclick="Layout.toggleRight()" title="Collapse gallery  ·  G">◀</button>
+          </div>
+
+          <div class="row" style="margin-top:8px">
+            <input type="text" x-model="search" placeholder="Search prompts…"
+                   @input.debounce.400ms="resetAndLoad()">
+            <label class="checkbox-label" title="Starred only">
+              <input type="checkbox" x-model="starredOnly" @change="resetAndLoad()"> ⭐
+            </label>
+          </div>
+
+          <!-- Columns control -->
+          <div class="gallery-options-row">
+            <span class="field-label" style="margin:0">Cols</span>
+            <button class="icon-btn sm" @click="thumbsPerRow = Math.max(1, thumbsPerRow - 1)"
+                    title="Fewer columns">−</button>
+            <span class="cols-value" x-text="thumbsPerRow"></span>
+            <button class="icon-btn sm" @click="thumbsPerRow = Math.min(8, thumbsPerRow + 1)"
+                    title="More columns">+</button>
+          </div>
+        </div><!-- /gallery-header -->
+
+        <!-- Thumbnails -->
+        <div id="gallery-contents">
+          <div id="thumbnail-grid"
+               :style="`grid-template-columns: repeat(${thumbsPerRow}, 1fr)`">
+            <template x-for="img in images" :key="img.image_name">
+              <div class="thumb-wrapper"
+                   :class="{selected: selectedImageName === img.image_name}"
+                   @click="selectImage(img.image_name)">
+                <img :src="`/api/v1/images/i/${img.image_name}/thumbnail`"
+                     :alt="img.prompt" loading="lazy">
+                <span x-show="img.starred" class="star-badge">⭐</span>
+              </div>
             </template>
-          </select>
-          <button class="icon-btn" title="New gallery" @click="createGallery()">+</button>
+          </div>
+          <div id="gallery-sentinel"></div>
+          <p x-show="loading" class="hint">Loading…</p>
+          <p x-show="!hasMore && images.length === 0" class="hint">No images yet.</p>
         </div>
 
-        <!-- Search -->
-        <div class="row" style="margin-top:8px">
-          <input type="text" x-model="search" placeholder="Search prompts…"
-                 @input.debounce.400ms="resetAndLoad()">
-          <label class="checkbox-label">
-            <input type="checkbox" x-model="starredOnly" @change="resetAndLoad()"> ⭐
-          </label>
-        </div>
-      </div>
-
-      <!-- Image thumbnails grid -->
-      <div id="gallery-contents">
-        <div id="thumbnail-grid">
-          <template x-for="img in images" :key="img.image_name">
-            <div class="thumb-wrapper" :class="{selected: selectedImageName === img.image_name}"
-                 @click="selectImage(img.image_name)">
-              <img :src="`/api/v1/images/i/${img.image_name}/thumbnail`"
-                   :alt="img.prompt" loading="lazy">
-              <span x-show="img.starred" class="star-badge">⭐</span>
-            </div>
-          </template>
-        </div>
-        <!-- Infinite scroll sentinel -->
-        <div id="gallery-sentinel"></div>
-        <p x-show="loading" class="hint">Loading…</p>
-        <p x-show="!hasMore && images.length === 0" class="hint">No images yet.</p>
-      </div>
+      </div><!-- /panel-inner -->
     </aside>
 
   </div><!-- #layout -->
 
 </body>
 </html>
-
-
 
 
