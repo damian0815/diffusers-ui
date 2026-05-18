@@ -24,7 +24,21 @@
 
     <!-- ===================== LEFT: Controls ===================== -->
     <aside id="controls-panel">
-      <h2 class="panel-title">Generate</h2>
+
+      <!-- Generate buttons — always at the top -->
+      <div class="row generate-row">
+        <button class="btn-primary" @click="generate(false)" title="Generate  ⌘↩">
+          ▶ Generate
+        </button>
+        <button class="icon-btn generate-priority" @click="generate(true)"
+                title="Front of queue  ⌘⇧↩">⏫</button>
+      </div>
+
+      <!-- Queue status (below generate) -->
+      <div id="queue-status" x-show="queueItems.length > 0">
+        <span x-text="`Queue: ${queueItems.length} item(s)`"></span>
+        <button class="link-btn" @click="clearQueue()">Clear</button>
+      </div>
 
       <!-- Prompt -->
       <label class="field-label">Prompt</label>
@@ -53,7 +67,7 @@
         <button class="icon-btn" title="Randomize seed" @click="seed = -1">🎲</button>
       </div>
 
-      <!-- Width / Height -->
+      <!-- Width / Height + lock aspect ratio -->
       <div class="row">
         <div class="field">
           <label class="field-label">Width</label>
@@ -63,7 +77,26 @@
           <label class="field-label">Height</label>
           <input type="number" x-model.number="height" step="64" min="256" max="2048">
         </div>
+        <button class="icon-btn ar-lock" :class="{'active': lockAspectRatio}"
+                @click="toggleLockAspectRatio()"
+                :title="lockAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio'">🔒</button>
       </div>
+
+      <!-- Aspect ratio presets -->
+      <select x-model="selectedAspectRatio"
+              @change="onAspectRatioSelect($event.target.value)"
+              class="ar-select">
+        <option value="custom">── Custom ──</option>
+        <option value="1:1">1∶1  Square</option>
+        <option value="5:4">5∶4</option>
+        <option value="4:3">4∶3</option>
+        <option value="3:2">3∶2  Landscape</option>
+        <option value="16:9">16∶9  Wide</option>
+        <option value="4:5">4∶5</option>
+        <option value="3:4">3∶4</option>
+        <option value="2:3">2∶3  Portrait</option>
+        <option value="9:16">9∶16  Story</option>
+      </select>
 
       <!-- Steps / CFG -->
       <div class="row">
@@ -98,24 +131,6 @@
             <option value="kdpm_2_a">KDPM2 A</option>
           </select>
         </div>
-      </div>
-
-      <!-- Generate buttons -->
-      <div class="row generate-row">
-        <button class="btn-primary" @click="generate(false)"
-                title="Generate (⌘+Enter)">
-          ▶ Generate
-        </button>
-        <button class="btn-secondary" @click="generate(true)"
-                title="Generate next (⌘+Shift+Enter)">
-          ⏫ Priority
-        </button>
-      </div>
-
-      <!-- Queue status -->
-      <div id="queue-status" x-show="queueItems.length > 0">
-        <span x-text="`Queue: ${queueItems.length} item(s)`"></span>
-        <button class="link-btn" @click="clearQueue()">Clear</button>
       </div>
 
       <!-- ===================== Models Management ===================== -->
@@ -163,6 +178,14 @@
     <!-- ===================== MIDDLE: Image display ===================== -->
     <main id="image-panel">
       <div id="image-display">
+        <!-- Floating preview toggle -->
+        <button id="preview-toggle"
+                @click="togglePreview()"
+                :class="{'off': !showPreview}"
+                :title="showPreview ? 'Hide preview  ·  V' : 'Show preview  ·  V'">
+          <span x-text="showPreview ? '👁' : '🙈'"></span>
+        </button>
+
         <!-- Live preview or selected image -->
         <img x-show="displaySrc" :src="displaySrc" id="main-image"
              :class="{'is-loading': imageLoading}"
@@ -180,12 +203,12 @@
       <!-- Adopt bar — applies settings from the selected image -->
       <div id="adopt-bar" x-show="selectedImageMeta">
         <span class="adopt-label">Adopt:</span>
-        <button class="adopt-btn" @click="adoptSettings('prompt')"     title="⌘1">Prompt</button>
-        <button class="adopt-btn" @click="adoptSettings('size')"       title="⌘2">Size</button>
-        <button class="adopt-btn" @click="adoptSettings('model')"      title="⌘3">Model</button>
-        <button class="adopt-btn" @click="adoptSettings('seed')"       title="⌘4">Seed</button>
-        <button class="adopt-btn" @click="adoptSettings('steps')"      title="⌘5">Steps</button>
-        <button class="adopt-btn" @click="adoptSettings('all')"        title="⌘6">All</button>
+        <button class="adopt-btn" @click="adoptSettings('prompt')" title="P">Prompt</button>
+        <button class="adopt-btn" @click="adoptSettings('size')"   title="D">Size</button>
+        <button class="adopt-btn" @click="adoptSettings('model')"  title="">Model</button>
+        <button class="adopt-btn" @click="adoptSettings('seed')"   title="S">Seed</button>
+        <button class="adopt-btn" @click="adoptSettings('steps')"  title="">Steps</button>
+        <button class="adopt-btn" @click="adoptSettings('all')"    title="A">All</button>
         <button class="icon-btn" @click="toggleStar()" :title="selectedImageMeta?.starred ? 'Unstar' : 'Star'">
           <span x-text="selectedImageMeta?.starred ? '⭐' : '☆'"></span>
         </button>

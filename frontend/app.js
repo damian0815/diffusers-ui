@@ -26,12 +26,37 @@ function app() {
     localScanPath: '',
     candidates: [],
 
+    // ---- Preview & aspect-ratio state ----
+    showPreview: true,
+    lockAspectRatio: false,
+    selectedAspectRatio: 'custom',
+    _aspectRatioValue: null,
+    _updatingAR: false,
+
     async init() {
       await this.loadModels();
       this.setupKeyboardShortcuts();
-      // Preview frames fill displaySrc directly; progress bar tracks steps
+
+      // Keep height in sync when width changes (and vice-versa) while AR is locked.
+      // The _updatingAR flag prevents the two watchers from cascading into each other.
+      this.$watch('width', (val) => {
+        if (this._updatingAR || !this.lockAspectRatio || !this._aspectRatioValue) return;
+        this._updatingAR = true;
+        this.height = this._roundTo64(val / this._aspectRatioValue);
+        this._updatingAR = false;
+      });
+      this.$watch('height', (val) => {
+        if (this._updatingAR || !this.lockAspectRatio || !this._aspectRatioValue) return;
+        this._updatingAR = true;
+        this.width = this._roundTo64(val * this._aspectRatioValue);
+        this._updatingAR = false;
+      });
+
+      // Preview frames write directly into displaySrc (only when preview is visible)
       connectPreview(({ image_b64, step, total_steps }) => {
-        this.displaySrc = `data:image/jpeg;base64,${image_b64}`;
+        if (this.showPreview) {
+          this.displaySrc = `data:image/jpeg;base64,${image_b64}`;
+        }
         this.previewProgress = total_steps > 0 ? step / total_steps : 0;
       });
     },
@@ -273,21 +298,73 @@ function app() {
     },
 
     // ----------------------------------------------------------------
+    // Preview toggle
+    // ----------------------------------------------------------------
+
+    togglePreview() {
+      this.showPreview = !this.showPreview;
+    },
+
+    // ----------------------------------------------------------------
+    // Aspect ratio
+    // ----------------------------------------------------------------
+
+    toggleLockAspectRatio() {
+      this.lockAspectRatio = !this.lockAspectRatio;
+      if (this.lockAspectRatio) {
+        // Capture the current ratio from the live inputs
+        this._aspectRatioValue = this.width / this.height;
+      } else {
+        this.selectedAspectRatio = 'custom';
+        this._aspectRatioValue = null;
+      }
+    },
+
+    onAspectRatioSelect(ratio) {
+      if (ratio === 'custom') {
+        this.lockAspectRatio = false;
+        this._aspectRatioValue = null;
+        return;
+      }
+      const [w, h] = ratio.split(':').map(Number);
+      this._aspectRatioValue = w / h;
+      // Recalculate height from current width, snapped to multiples of 64
+      this.height = this._roundTo64(this.width / this._aspectRatioValue);
+      this.lockAspectRatio = true;
+    },
+
+    /** Round n to the nearest multiple of 64, minimum 256. */
+    _roundTo64(n) {
+      return Math.max(256, Math.round(n / 64) * 64);
+    },
+
+    // ----------------------------------------------------------------
     // Keyboard shortcuts
     // ----------------------------------------------------------------
 
     setupKeyboardShortcuts() {
-      const ADOPT_KEYS = ['1', '2', '3', '4', '5', '6'];
-      const ADOPT_WHAT = ['prompt', 'size', 'model', 'seed', 'steps', 'all'];
       document.addEventListener('keydown', (e) => {
         const meta = e.metaKey || e.ctrlKey;
+        const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(
+          document.activeElement?.tagName
+        );
+
+        // ⌘↩  Generate  /  ⌘⇧↩  Front of queue
         if (meta && e.key === 'Enter') {
           e.preventDefault();
-          this.generate(e.shiftKey); // shift = prepend (priority)
+          this.generate(e.shiftKey);
+          return;
         }
-        if (meta && ADOPT_KEYS.includes(e.key)) {
-          e.preventDefault();
-          this.adoptSettings(ADOPT_WHAT[ADOPT_KEYS.indexOf(e.key)]);
+
+        // Single-letter shortcuts — disabled while an input has focus
+        if (!isTyping && !meta && !e.altKey && !e.shiftKey) {
+          switch (e.key.toUpperCase()) {
+            case 'P': e.preventDefault(); this.adoptSettings('prompt'); break;
+            case 'S': e.preventDefault(); this.adoptSettings('seed');   break;
+            case 'D': e.preventDefault(); this.adoptSettings('size');   break;
+            case 'A': e.preventDefault(); this.adoptSettings('all');    break;
+            case 'V': e.preventDefault(); this.togglePreview();         break;
+          }
         }
       });
     },

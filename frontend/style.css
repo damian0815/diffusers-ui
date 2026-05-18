@@ -148,7 +148,28 @@ select option { background: var(--input-bg); }
   flex-shrink: 0;
 }
 .icon-btn:hover { color: var(--text); border-color: var(--text-muted); }
-.icon-btn.danger:hover { color: var(--accent); border-color: var(--accent); }
+.icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(233, 69, 96, 0.12);
+}
+
+/* Priority generate button — compact icon sizing */
+.generate-priority {
+  font-size: 17px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+}
+
+/* Aspect-ratio select — same look as other selects but slightly smaller */
+.ar-select {
+  font-size: 12px;
+  padding: 4px 6px;
+  color: var(--text-muted);
+}
+
+/* Lock-AR button sits at the end of the w/h row */
+.ar-lock { align-self: flex-end; margin-bottom: 1px; }
 
 .link-btn {
   background: none;
@@ -224,7 +245,6 @@ select option { background: var(--input-bg); }
   object-fit: contain;
   border-radius: var(--radius);
   /* Smooth cross-fade when swapping thumbnail → full image */
-  transition: filter 0.25s ease;
 }
 /* Blur the upscaled thumbnail while the full image is loading */
 #main-image.is-loading {
@@ -237,6 +257,26 @@ select option { background: var(--input-bg); }
   font-size: 15px;
   text-align: center;
 }
+
+/* ---- Preview toggle (floating corner button inside #image-display) ---- */
+#preview-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+  background: rgba(10, 10, 20, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 5px 9px;
+  font-size: 15px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.15s, opacity 0.15s;
+  line-height: 1;
+}
+#preview-toggle:hover { background: rgba(30, 30, 50, 0.85); }
+#preview-toggle.off { opacity: 0.5; }
 
 /* ---- Progress bar ---- */
 #progress-bar {
