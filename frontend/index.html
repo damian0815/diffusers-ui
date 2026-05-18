@@ -13,41 +13,53 @@
 </head>
 <body x-data="app()" x-on:select-image.window="selectImageFromEvent($event)">
 
-  <!-- Error banner -->
-  <div id="error-banner" x-show="errorMessage" x-transition>
-    <span x-text="errorMessage"></span>
-    <button @click="errorMessage = null">&times;</button>
-  </div>
+  <!-- ═══ APP NAV BAR ════════════════════════════════════ -->
+  <nav id="app-nav">
+    <span class="nav-brand">⬡ diffusers-ui</span>
 
-  <div id="layout">
+    <div class="nav-tabs">
+      <button class="nav-tab" :class="{active: activeTab==='generate'}"
+              @click="activeTab='generate'" title="Generate · 1">
+        Generate
+      </button>
+      <button class="nav-tab" :class="{active: activeTab==='queue'}"
+              @click="activeTab='queue'" title="Queue · 2">
+        Queue
+        <span class="nav-badge" x-show="queueItems.length > 0"
+              x-text="queueItems.length"></span>
+      </button>
+      <button class="nav-tab" :class="{active: activeTab==='models'}"
+              @click="activeTab='models'" title="Models · 5">
+        Models
+        <span class="nav-badge models-badge"
+              x-show="models.length > 0" x-text="models.length"></span>
+      </button>
+    </div>
 
-    <!-- ═══════════════ LEFT: Controls ═══════════════ -->
+    <!-- Inline error toast -->
+    <div class="nav-error" x-show="errorMessage" x-transition>
+      <span x-text="errorMessage"></span>
+      <button @click="errorMessage = null">&times;</button>
+    </div>
+  </nav>
+
+  <!-- ═══ VIEW: GENERATE (three-panel) ═══════════════════ -->
+  <div id="layout" x-show="activeTab === 'generate'">
+
+    <!-- ── LEFT: Controls ── -->
     <aside id="controls-panel">
-
-      <!-- Collapsed strip (visible only when panel is collapsed) -->
       <div class="collapsed-strip">
-        <button class="expand-btn" onclick="Layout.toggleLeft()" title="Expand params  ·  T">&#8250;</button>
+        <button class="expand-btn" onclick="Layout.toggleLeft()" title="Expand  ·  T">&#8250;</button>
         <span class="collapsed-label">PARAMS</span>
       </div>
 
-      <!-- Full panel content -->
       <div class="panel-inner">
-
-        <!-- Tab bar -->
-        <div id="tab-bar">
-          <button class="tab-btn" :class="{active: activeTab==='generate'}"
-                  @click="activeTab='generate'" title="Generate tab  ·  1">
-            Generate
-          </button>
-          <button class="tab-btn" :class="{active: activeTab==='models'}"
-                  @click="activeTab='models'" title="Models tab  ·  5">
-            Models
-          </button>
-          <button class="tab-collapse-btn" onclick="Layout.toggleLeft()" title="Collapse params  ·  T">&#8249;</button>
+        <div class="panel-header">
+          <span class="panel-title">Parameters</span>
+          <button class="tab-collapse-btn" onclick="Layout.toggleLeft()" title="Collapse  ·  T">&#8249;</button>
         </div>
 
-        <!-- ── TAB: Generate ── -->
-        <div class="tab-content" x-show="activeTab === 'generate'">
+        <div class="panel-scroll">
 
           <div class="row generate-row">
             <button class="btn-primary" @click="generate(false)" title="Generate  ·  ⌘↩">
@@ -64,7 +76,7 @@
 
           <label class="checkbox-label option-row">
             <input type="checkbox" x-model="autoSelectLatest">
-            Auto-select latest image
+            Auto-select latest
           </label>
 
           <div class="field-group">
@@ -83,7 +95,7 @@
               <template x-for="m in models" :key="m.key">
                 <option :value="m.key" x-text="m.name"></option>
               </template>
-              <option value="" x-show="models.length === 0" disabled>No models registered — go to Models tab</option>
+              <option value="" x-show="models.length === 0" disabled>No models — go to Models tab</option>
             </select>
           </div>
 
@@ -92,7 +104,7 @@
               <label class="field-label">Seed <small>(-1 = random)</small></label>
               <input type="number" x-model.number="seed" min="-1" max="4294967295">
             </div>
-            <button class="icon-btn" title="Randomise  ·  🎲" @click="seed = -1">🎲</button>
+            <button class="icon-btn" title="Randomise" @click="seed = -1">🎲</button>
           </div>
 
           <div class="row">
@@ -106,7 +118,7 @@
             </div>
             <button class="icon-btn ar-lock" :class="{active: lockAspectRatio}"
                     @click="toggleLockAspectRatio()"
-                    :title="lockAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio  ·  🔒'">🔒</button>
+                    :title="lockAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio'">🔒</button>
           </div>
 
           <select x-model="selectedAspectRatio"
@@ -156,71 +168,24 @@
             </div>
           </div>
 
-        </div><!-- /tab-generate -->
-
-        <!-- ── TAB: Models ── -->
-        <div class="tab-content" x-show="activeTab === 'models'">
-
-          <div id="models-list">
-            <template x-for="m in models" :key="m.key">
-              <div class="model-entry">
-                <div class="model-info">
-                  <span class="model-name" x-text="m.name"></span>
-                  <span class="model-base" x-text="m.base"></span>
-                </div>
-                <button class="icon-btn danger" title="Delete model" @click="deleteModel(m.key)">🗑</button>
-              </div>
-            </template>
-            <p x-show="models.length === 0" class="hint">No models registered yet.</p>
-          </div>
-
-          <div class="section-divider"></div>
-
-          <p class="field-label" style="margin-bottom:6px">Discover models</p>
-
-          <button class="btn-secondary full-width" @click="scanHfCache()">
-            🔍 Scan HF Cache
-          </button>
-
-          <div class="row" style="margin-top:8px">
-            <input type="text" x-model="localScanPath" placeholder="/path/to/local/models">
-            <button class="btn-secondary" @click="scanLocalDir()">📁 Scan Dir</button>
-          </div>
-
-          <div x-show="candidates.length > 0" id="candidates-list">
-            <p class="field-label" style="margin-bottom:6px">Candidates</p>
-            <template x-for="(c, idx) in candidates" :key="idx">
-              <div class="candidate-entry">
-                <div class="candidate-info">
-                  <span x-text="c.name"></span>
-                  <small x-text="c.source" class="text-muted-truncate"></small>
-                </div>
-                <button class="btn-secondary" @click="registerCandidate(c)">+ Add</button>
-              </div>
-            </template>
-            <button class="link-btn" @click="candidates = []">Dismiss all</button>
-          </div>
-
-        </div><!-- /tab-models -->
-
+        </div><!-- /panel-scroll -->
       </div><!-- /panel-inner -->
     </aside>
 
     <!-- Drag handle (left) -->
     <div class="resize-handle" id="left-handle" title="Drag to resize"></div>
 
-    <!-- ═══════════════ MIDDLE: Image ═══════════════ -->
+    <!-- ── MIDDLE: Image ── -->
     <main id="image-panel">
 
-      <!-- Adopt bar at TOP of image panel -->
       <div id="adopt-bar" x-show="selectedImageMeta">
         <span class="adopt-label">Adopt:</span>
-        <button class="adopt-btn" @click="adoptSettings('prompt')" title="Use prompt  ·  P">Prompt</button>
-        <button class="adopt-btn" @click="adoptSettings('size')"   title="Use size  ·  D">Size</button>
-        <button class="adopt-btn" @click="adoptSettings('model')"  title="Use model">Model</button>
-        <button class="adopt-btn" @click="adoptSettings('seed')"   title="Use seed  ·  S">Seed</button>
-        <button class="adopt-btn" @click="adoptSettings('steps')"  title="Use steps/cfg/sampler">Steps</button>
-        <button class="adopt-btn" @click="adoptSettings('all')"    title="Use all params  ·  A">All</button>
+        <button class="adopt-btn" @click="adoptSettings('prompt')" title="P">Prompt</button>
+        <button class="adopt-btn" @click="adoptSettings('size')"   title="D">Size</button>
+        <button class="adopt-btn" @click="adoptSettings('model')"  title="">Model</button>
+        <button class="adopt-btn" @click="adoptSettings('seed')"   title="S">Seed</button>
+        <button class="adopt-btn" @click="adoptSettings('steps')"  title="">Steps</button>
+        <button class="adopt-btn" @click="adoptSettings('all')"    title="A">All</button>
         <button class="icon-btn star-btn" @click="toggleStar()"
                 :title="selectedImageMeta?.starred ? 'Unstar' : 'Star'">
           <span x-text="selectedImageMeta?.starred ? '⭐' : '☆'"></span>
@@ -228,7 +193,6 @@
       </div>
 
       <div id="image-display">
-        <!-- Preview toggle -->
         <button id="preview-toggle"
                 @click="togglePreview()"
                 :class="{off: !showPreview}"
@@ -236,7 +200,6 @@
           <span x-text="showPreview ? '👁' : '🙈'"></span>
         </button>
 
-        <!-- Info overlay toggle -->
         <button id="info-toggle"
                 @click="toggleInfoOverlay()"
                 :class="{active: showInfoOverlay}"
@@ -254,7 +217,7 @@
 
           <div class="info-overlay-header">
             <span class="info-overlay-title">Image Info</span>
-            <button class="info-close-btn" @click="showInfoOverlay = false" title="Close  ·  I">&times;</button>
+            <button class="info-close-btn" @click="showInfoOverlay = false">&times;</button>
           </div>
 
           <div class="info-row">
@@ -264,7 +227,6 @@
               <span class="info-value" x-text="selectedImageMeta?.prompt || '—'"></span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('negPrompt')" title="Use negative prompt">↩</button>
             <div class="info-field">
@@ -272,7 +234,6 @@
               <span class="info-value" x-text="selectedImageMeta?.negative_prompt || '—'"></span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('model')" title="Use model">↩</button>
             <div class="info-field">
@@ -282,7 +243,6 @@
               </span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('seed')" title="Use seed">↩</button>
             <div class="info-field">
@@ -290,7 +250,6 @@
               <span class="info-value" x-text="selectedImageMeta?.seed ?? '—'"></span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('size')" title="Use size">↩</button>
             <div class="info-field">
@@ -300,7 +259,6 @@
               </span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('steps')" title="Use steps">↩</button>
             <div class="info-field">
@@ -308,7 +266,6 @@
               <span class="info-value" x-text="selectedImageMeta?.steps ?? '—'"></span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('cfg')" title="Use CFG">↩</button>
             <div class="info-field">
@@ -316,7 +273,6 @@
               <span class="info-value" x-text="selectedImageMeta?.cfg ?? '—'"></span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('cfgRescale')" title="Use CFG Rescale">↩</button>
             <div class="info-field">
@@ -324,7 +280,6 @@
               <span class="info-value" x-text="selectedImageMeta?.cfg_rescale_multiplier ?? '—'"></span>
             </div>
           </div>
-
           <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('sampler')" title="Use sampler">↩</button>
             <div class="info-field">
@@ -356,20 +311,17 @@
     <!-- Drag handle (right) -->
     <div class="resize-handle" id="right-handle" title="Drag to resize"></div>
 
-    <!-- ═══════════════ RIGHT: Gallery ═══════════════ -->
+    <!-- ── RIGHT: Gallery ── -->
     <aside id="gallery-panel"
            x-data="gallery()"
            x-on:select-image.window="handleExternalSelect($event)">
 
-      <!-- Collapsed strip -->
       <div class="collapsed-strip">
         <button class="expand-btn" onclick="Layout.toggleRight()" title="Expand gallery  ·  G">&#8249;</button>
         <span class="collapsed-label">GALLERY</span>
       </div>
 
       <div class="panel-inner">
-
-        <!-- Gallery controls header -->
         <div id="gallery-header">
           <div class="row">
             <select id="board-select" x-model="selectedBoardId" @change="onBoardChange()">
@@ -381,7 +333,7 @@
             <button class="icon-btn" onclick="Layout.toggleRight()" title="Collapse gallery  ·  G">◀</button>
           </div>
 
-          <div class="row" style="margin-top:8px">
+          <div class="row" style="margin-top:6px">
             <input type="text" x-model="search" placeholder="Search prompts…"
                    @input.debounce.400ms="resetAndLoad()">
             <label class="checkbox-label" title="Starred only">
@@ -389,18 +341,14 @@
             </label>
           </div>
 
-          <!-- Columns control -->
           <div class="gallery-options-row">
             <span class="field-label" style="margin:0">Cols</span>
-            <button class="icon-btn sm" @click="thumbsPerRow = Math.max(1, thumbsPerRow - 1)"
-                    title="Fewer columns">−</button>
+            <button class="icon-btn sm" @click="thumbsPerRow = Math.max(1, thumbsPerRow - 1)">−</button>
             <span class="cols-value" x-text="thumbsPerRow"></span>
-            <button class="icon-btn sm" @click="thumbsPerRow = Math.min(8, thumbsPerRow + 1)"
-                    title="More columns">+</button>
+            <button class="icon-btn sm" @click="thumbsPerRow = Math.min(8, thumbsPerRow + 1)">+</button>
           </div>
-        </div><!-- /gallery-header -->
+        </div>
 
-        <!-- Thumbnails -->
         <div id="gallery-contents">
           <div id="thumbnail-grid"
                :style="`grid-template-columns: repeat(${thumbsPerRow}, 1fr)`">
@@ -418,13 +366,159 @@
           <p x-show="loading" class="hint">Loading…</p>
           <p x-show="!hasMore && images.length === 0" class="hint">No images yet.</p>
         </div>
-
-      </div><!-- /panel-inner -->
+      </div>
     </aside>
 
-  </div><!-- #layout -->
+  </div><!-- /#layout -->
+
+
+  <!-- ═══ VIEW: QUEUE ═════════════════════════════════════ -->
+  <div id="queue-view" x-show="activeTab === 'queue'">
+
+    <div class="fs-header">
+      <div class="fs-header-left">
+        <h1 class="fs-title">Queue</h1>
+        <div class="fs-stats" x-show="queueDetails.length > 0">
+          <span class="stat-pill pending"
+                x-text="`${queueDetails.filter(i=>i.status==='pending').length} pending`"></span>
+          <span class="stat-pill processing"
+                x-text="`${queueDetails.filter(i=>i.status==='processing').length} processing`"></span>
+          <span class="stat-pill done"
+                x-text="`${queueDetails.filter(i=>i.status==='completed').length} done`"></span>
+          <span class="stat-pill failed"
+                x-show="queueDetails.filter(i=>i.status==='failed').length > 0"
+                x-text="`${queueDetails.filter(i=>i.status==='failed').length} failed`"></span>
+        </div>
+      </div>
+      <div class="fs-header-actions">
+        <button class="btn-secondary" @click="loadQueueDetails()" title="Refresh">↻ Refresh</button>
+        <button class="btn-secondary" @click="pruneQueue()" title="Remove completed/failed rows">Prune done</button>
+        <button class="btn-secondary danger" @click="clearQueue()" title="Cancel all pending">Clear pending</button>
+      </div>
+    </div>
+
+    <div class="fs-body">
+      <div x-show="queueDetails.length === 0" class="fs-empty">
+        <div class="placeholder-inner">
+          <div class="placeholder-icon">⏳</div>
+          <p>Queue is empty.</p>
+          <p class="placeholder-hint">⌘↩ to generate</p>
+        </div>
+      </div>
+
+      <div x-show="queueDetails.length > 0" class="queue-list">
+        <template x-for="item in queueDetails" :key="item.item_id">
+          <div class="queue-row" :class="`status-${item.status}`">
+            <div class="queue-status-col">
+              <span class="status-dot" :class="item.status"></span>
+              <span class="status-label" x-text="item.status"></span>
+            </div>
+            <div class="queue-id-col">
+              <span class="queue-id" x-text="`#${item.item_id}`"></span>
+            </div>
+            <div class="queue-model-col">
+              <span x-text="models.find(m => m.key === item.model_key)?.name || item.model_key || '—'"></span>
+            </div>
+            <div class="queue-prompt-col">
+              <span x-text="item.prompt || '—'"></span>
+            </div>
+            <div class="queue-error-col" x-show="item.error">
+              <span class="queue-error" x-text="item.error"></span>
+            </div>
+            <div class="queue-actions-col">
+              <button x-show="item.status === 'completed' && item.output_image_name"
+                      class="icon-btn sm"
+                      @click="viewQueueImage(item.output_image_name)"
+                      title="View image">🖼</button>
+              <button x-show="item.status === 'pending'"
+                      class="icon-btn sm danger"
+                      @click="cancelQueueItem(item.item_id)"
+                      title="Cancel">✕</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+  </div><!-- /#queue-view -->
+
+
+  <!-- ═══ VIEW: MODELS ════════════════════════════════════ -->
+  <div id="models-view" x-show="activeTab === 'models'">
+
+    <div class="fs-header">
+      <div class="fs-header-left">
+        <h1 class="fs-title">Models</h1>
+        <span class="fs-subtitle"
+              x-text="models.length ? `${models.length} registered` : 'No models registered'"></span>
+      </div>
+      <div class="fs-header-actions">
+        <button class="btn-secondary" @click="scanHfCache()">🔍 Scan HF Cache</button>
+      </div>
+    </div>
+
+    <div class="fs-body models-layout">
+
+      <!-- Registered models -->
+      <section class="models-section">
+        <h2 class="section-heading">Registered</h2>
+        <p x-show="models.length === 0" class="hint" style="padding:16px 0">
+          No models registered yet. Use Discover to add one.
+        </p>
+        <div class="models-grid">
+          <template x-for="m in models" :key="m.key">
+            <div class="model-card">
+              <div class="model-card-body">
+                <span class="model-card-name" x-text="m.name"></span>
+                <span class="model-card-base" x-text="m.base"></span>
+                <span class="model-card-source" x-text="m.source" title="Source path"></span>
+              </div>
+              <div class="model-card-actions">
+                <button class="icon-btn danger" title="Delete model"
+                        @click="deleteModel(m.key)">🗑</button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <!-- Discover / add models -->
+      <section class="models-section discover-section">
+        <h2 class="section-heading">Discover</h2>
+
+        <div class="row" style="margin-bottom:8px">
+          <input type="text" x-model="localScanPath" placeholder="/path/to/local/models"
+                 style="flex:1">
+          <button class="btn-secondary" @click="scanLocalDir()">📁 Scan Dir</button>
+        </div>
+
+        <div x-show="candidates.length === 0" class="hint" style="margin-top:8px">
+          Scan your HF cache or a local directory to discover models.
+        </div>
+
+        <div x-show="candidates.length > 0">
+          <div class="candidates-header">
+            <span class="section-heading" style="margin:0">Candidates
+              <span class="candidates-count" x-text="`(${candidates.length})`"></span>
+            </span>
+            <button class="link-btn" @click="candidates = []">Dismiss all</button>
+          </div>
+          <div class="candidates-grid">
+            <template x-for="(c, idx) in candidates" :key="idx">
+              <div class="candidate-card">
+                <div class="candidate-card-body">
+                  <span class="candidate-name" x-text="c.name"></span>
+                  <span class="candidate-source" x-text="c.source"></span>
+                </div>
+                <button class="btn-secondary" @click="registerCandidate(c)">+ Add</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
+
+    </div><!-- /fs-body -->
+  </div><!-- /#models-view -->
 
 </body>
 </html>
-
-

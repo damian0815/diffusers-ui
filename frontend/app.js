@@ -23,6 +23,8 @@ function app() {
     imageLoading: false,
     previewProgress: 0,
     queueItems: [],
+    queueDetails: [],
+    _queueTimer: null,
     errorMessage: null,
     localScanPath: '',
     candidates: [],
@@ -40,6 +42,18 @@ function app() {
       Layout.init();
       await this.loadModels();
       this.setupKeyboardShortcuts();
+
+      // Auto-refresh queue details when on the queue tab
+      this.$watch('activeTab', (tab) => {
+        clearInterval(this._queueTimer);
+        this._queueTimer = null;
+        if (tab === 'queue') {
+          this.loadQueueDetails();
+          this._queueTimer = setInterval(() => {
+            if (this.activeTab === 'queue') this.loadQueueDetails();
+          }, 2000);
+        }
+      });
 
       this.$watch('width', (val) => {
         if (this._updatingAR || !this.lockAspectRatio || !this._aspectRatioValue) return;
@@ -168,8 +182,42 @@ function app() {
     // ----------------------------------------------------------------
 
     async clearQueue() {
-      try { await fetch('/api/v1/queue/default/clear', { method: 'PUT' }); this.queueItems = []; }
+      try { await fetch('/api/v1/queue/default/clear', { method: 'PUT' }); this.queueItems = []; await this.loadQueueDetails(); }
       catch (e) { this.errorMessage = 'Could not clear queue.'; }
+    },
+
+    async loadQueueDetails() {
+      try {
+        const resp = await fetch('/api/v1/queue/default/');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        this.queueDetails = data.items || [];
+      } catch (e) {}
+    },
+
+    async cancelQueueItem(itemId) {
+      try {
+        await fetch(`/api/v1/queue/default/i/${itemId}`, { method: 'DELETE' });
+        await this.loadQueueDetails();
+      } catch (e) { this.errorMessage = 'Could not cancel item.'; }
+    },
+
+    async pruneQueue() {
+      try {
+        await fetch('/api/v1/queue/default/prune', { method: 'PUT' });
+        await this.loadQueueDetails();
+        this.queueItems = this.queueItems.filter(id =>
+          this.queueDetails.some(d => d.item_id === id && (d.status === 'pending' || d.status === 'processing'))
+        );
+      } catch (e) { this.errorMessage = 'Could not prune queue.'; }
+    },
+
+    viewQueueImage(imageName) {
+      this.activeTab = 'generate';
+      this.$nextTick(() => {
+        this.selectImageFromEvent({ detail: { imageName } });
+        window.dispatchEvent(new CustomEvent('select-image', { detail: { imageName } }));
+      });
     },
 
     // ----------------------------------------------------------------
@@ -278,6 +326,7 @@ function app() {
         if (!isTyping && !meta && !e.altKey && !e.shiftKey) {
           switch (e.key.toUpperCase()) {
             case '1': e.preventDefault(); this.activeTab = 'generate'; break;
+            case '2': e.preventDefault(); this.activeTab = 'queue';    break;
             case '5': e.preventDefault(); this.activeTab = 'models';   break;
             case 'G': e.preventDefault(); Layout.toggleRight();        break;
             case 'T': e.preventDefault(); Layout.toggleLeft();         break;
@@ -286,13 +335,14 @@ function app() {
             case 'D': e.preventDefault(); this.adoptSettings('size');   break;
             case 'A': e.preventDefault(); this.adoptSettings('all');    break;
             case 'V': e.preventDefault(); this.togglePreview();         break;
-            case 'I': e.preventDefault(); this.toggleInfoOverlay();      break;
+            case 'I': e.preventDefault(); this.toggleInfoOverlay();     break;
           }
         }
       });
     },
   };
 }
+
 
 
 
