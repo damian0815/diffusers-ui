@@ -49,6 +49,44 @@ class QueueManager:
         self._new_item_event.set()
         return item
 
+    async def requeue_items(self, items: list[QueueItem], prepend: bool = True) -> None:
+        """
+        Reset *items* to PENDING and put them back in the queue.
+
+        Used after an OOM failure to retry at a smaller batch size.
+        When *prepend* is True (default) items are placed at the front so they
+        are picked up before any subsequently-enqueued work.
+        """
+        async with self._lock:
+            ordered = list(reversed(items)) if prepend else items
+            for item in ordered:
+                item.status = ItemStatus.PENDING
+                item.error = None
+                if prepend:
+                    self._queue.appendleft(item)
+                else:
+                    self._queue.append(item)
+        for item in items:
+            await self._persist(item)
+        self._new_item_event.set()
+
+    async def move_to_front(self, item_id: int) -> bool:
+        """
+        Move a *pending* item to the front of the queue.
+
+        Returns False if the item is not found or not in PENDING status.
+        """
+        async with self._lock:
+            item = self._all_items.get(item_id)
+            if item is None or item.status != ItemStatus.PENDING:
+                return False
+            try:
+                self._queue.remove(item)
+            except ValueError:
+                return False  # item not in deque (shouldn't happen for PENDING)
+            self._queue.appendleft(item)
+        return True
+
     async def next_pending_batch_window(self, window_s: float) -> list[QueueItem]:
         """
         Wait until at least one pending item is available, then collect all

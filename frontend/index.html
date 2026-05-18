@@ -69,9 +69,9 @@
                     title="Front of queue  ·  ⌘⇧↩">⏫</button>
           </div>
 
-          <div id="queue-status" x-show="queueItems.length > 0">
-            <span x-text="`Queue: ${queueItems.length}`"></span>
-            <button class="link-btn" @click="clearQueue()">Clear</button>
+          <div id="queue-status">
+            <span x-text="queueItems.length > 0 ? `Queue: ${queueItems.length}` : 'Queue: idle'"></span>
+            <button class="link-btn" @click="clearQueue()" x-show="queueItems.length > 0">Clear</button>
           </div>
 
           <label class="checkbox-label option-row">
@@ -432,9 +432,17 @@
                       @click="viewQueueImage(item.output_image_name)"
                       title="View image">🖼</button>
               <button x-show="item.status === 'pending'"
+                      class="icon-btn sm"
+                      @click="moveToFront(item.item_id)"
+                      title="Move to front of queue">⏫</button>
+              <button x-show="item.status === 'pending'"
                       class="icon-btn sm danger"
                       @click="cancelQueueItem(item.item_id)"
                       title="Cancel">✕</button>
+              <button x-show="['failed','cancelled','completed'].includes(item.status)"
+                      class="icon-btn sm"
+                      @click="resubmitItem(item.item_id)"
+                      title="Resubmit">↻</button>
             </div>
           </div>
         </template>

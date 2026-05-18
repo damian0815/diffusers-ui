@@ -12,6 +12,7 @@ from backend.config import settings
 from backend.domain import QueueItem, ItemStatus
 from backend.pipeline.batcher import group_into_batches
 from backend.pipeline.preview import latents_to_preview_image, PreviewBroadcaster
+from backend.pipeline.compel_encoder import build_prompt_embeds
 
 if TYPE_CHECKING:
     from backend.queue.manager import QueueManager
@@ -21,6 +22,20 @@ if TYPE_CHECKING:
 from backend.pipeline.flow_match_scheduler import SDPipelineInferenceFlowMatchEulerDiscreteScheduler
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Feature flag: use the scheduler's predicted-original-sample for previews
+# instead of the current (noisy) latent.
+#
+# When True the step callback requests "pred_original_sample" from the
+# scheduler and, if it is available, passes it to latents_to_preview_image.
+# This gives a much cleaner preview from step ~10 onward, but not every
+# scheduler exposes pred_original_sample — those fall back gracefully to the
+# noisy latent.
+#
+# See PRED_ORIGINAL_SAMPLE_howto_enable.md for how to enable this.
+# ---------------------------------------------------------------------------
+USE_PRED_ORIGINAL_SAMPLE: bool = True  # ← set to True to enable
 
 # Map domain sampler names → diffusers scheduler class names
 SAMPLER_MAP: dict[str, str] = {
@@ -40,6 +55,19 @@ SAMPLER_MAP: dict[str, str] = {
 
 # Samplers that use Karras sigma sigmas
 KARRAS_SAMPLERS = {"dpmpp_sde_k", "dpmpp_2m_sde_k"}
+
+
+def _is_oom(exc: Exception) -> bool:
+    """Return True if *exc* looks like a GPU/CPU out-of-memory error."""
+    # torch.cuda.OutOfMemoryError is a RuntimeError subclass (PyTorch ≥ 2.0)
+    try:
+        import torch
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            return True
+    except Exception:
+        pass
+    msg = str(exc).lower()
+    return "out of memory" in msg or "outofmemory" in msg
 
 
 class PipelineWorker:
@@ -68,6 +96,9 @@ class PipelineWorker:
         # _idle is SET when no generation is in flight; CLEARED while running one.
         self._idle = asyncio.Event()
         self._idle.set()
+        # Maximum items per pipeline call; 0 = unlimited.
+        # Automatically halved on CUDA/MPS out-of-memory to avoid repeated OOM.
+        self._max_batch_size: int = 0
 
     async def run(self) -> None:
         """Main loop — drains queue continuously until stopped."""
@@ -79,7 +110,7 @@ class PipelineWorker:
                 break
             if not items:
                 continue
-            for batch in group_into_batches(items):
+            for batch in group_into_batches(items, max_size=self._max_batch_size):
                 if not self._running:
                     break
                 self._idle.clear()
@@ -127,6 +158,13 @@ class PipelineWorker:
         prompts = [item.params.prompt for item in batch]
         neg_prompts = [item.params.negative_prompt for item in batch]
         seeds = [item.params.seed for item in batch]
+        is_sdxl: bool = entry.base == "sdxl"
+
+        # Encode prompts with Compel (supports weighted syntax and long prompts).
+        # Runs in a thread because text encoding calls the GPU-bound text encoder.
+        prompt_kwargs = await asyncio.to_thread(
+            build_prompt_embeds, pipeline, prompts, neg_prompts, is_sdxl=is_sdxl
+        )
 
         step_counter: dict[str, int] = {"n": 0}
         event_loop = asyncio.get_event_loop()
@@ -134,11 +172,37 @@ class PipelineWorker:
         def on_step(pipe, step: int, timestep, callback_kwargs: dict) -> dict:
             step_counter["n"] += 1
             if step_counter["n"] % settings.preview_every_n_steps == 0:
-                latents = callback_kwargs.get("latents")
-                if latents is not None:
+                # ------------------------------------------------------------------
+                # USE_PRED_ORIGINAL_SAMPLE block (disabled by default).
+                # When enabled, prefer the scheduler's denoised estimate over the
+                # raw noisy latent — produces a cleaner preview from ~step 10 on.
+                # Sources checked in order:
+                #   1. pipe.scheduler._last_pred_original_sample — set by our
+                #      SDPipelineInferenceFlowMatchEulerDiscreteScheduler.step()
+                #      override (and any future scheduler overrides).
+                #      NOTE: callback_on_step_end_tensor_inputs cannot include
+                #      "pred_original_sample" because diffusers validates that list
+                #      against a fixed pipeline-defined whitelist; the scheduler
+                #      attribute is the only reliable cross-scheduler path.
+                #   2. callback_kwargs["latents"] — noisy-latent fallback for
+                #      schedulers that set no attribute.
+                # See PRED_ORIGINAL_SAMPLE_howto_enable.md to enable.
+                # ------------------------------------------------------------------
+                if USE_PRED_ORIGINAL_SAMPLE:
+                    sample = getattr(pipe.scheduler, "_last_pred_original_sample", None)
+                    if sample is None:
+                        # Scheduler doesn't expose it — fall back gracefully.
+                        sample = callback_kwargs.get("latents")
+                else:
+                    sample = callback_kwargs.get("latents")
+                # ------------------------------------------------------------------
+
+                if sample is not None:
                     for i, item in enumerate(batch):
                         try:
-                            preview = latents_to_preview_image(latents[i: i + 1])
+                            preview = latents_to_preview_image(
+                                sample[i: i + 1], is_sdxl=is_sdxl
+                            )
                             asyncio.run_coroutine_threadsafe(
                                 self._broadcaster.broadcast(
                                     item.item_id, step, params.steps, preview
@@ -167,8 +231,7 @@ class PipelineWorker:
 
             result = await asyncio.to_thread(
                 pipeline,
-                prompt=prompts,
-                negative_prompt=neg_prompts,
+                **prompt_kwargs,
                 width=params.width,
                 height=params.height,
                 num_inference_steps=params.steps,
@@ -183,10 +246,49 @@ class PipelineWorker:
                 await self._record_in_gallery(item, image_name, entry.name)
 
         except Exception as exc:
-            logger.exception("Pipeline inference failed")
-            for item in batch:
-                if item.status == ItemStatus.PROCESSING:
-                    await self._queue.mark_failed(item, str(exc))
+            if _is_oom(exc):
+                await self._handle_oom(batch, exc)
+            else:
+                logger.exception("Pipeline inference failed")
+                for item in batch:
+                    if item.status == ItemStatus.PROCESSING:
+                        await self._queue.mark_failed(item, str(exc))
+
+    async def _handle_oom(self, batch: list[QueueItem], exc: Exception) -> None:
+        """
+        Respond to an out-of-memory error during inference.
+
+        Strategy:
+        - Free the VRAM cache immediately.
+        - If the batch has more than one item, halve ``_max_batch_size`` and
+          re-enqueue all items at the front of the queue so they are retried
+          at a smaller batch size on the next pass.
+        - If the batch is already a single item, it can't be split further;
+          mark it as failed with a clear OOM message.
+        """
+        import torch
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+        if len(batch) > 1:
+            new_max = max(1, len(batch) // 2)
+            # Only ever reduce, never increase.
+            if self._max_batch_size == 0 or new_max < self._max_batch_size:
+                self._max_batch_size = new_max
+            logger.warning(
+                "OOM with batch size %d — reducing max batch size to %d and requeuing.",
+                len(batch), self._max_batch_size,
+            )
+            await self._queue.requeue_items(batch, prepend=True)
+        else:
+            logger.error("OOM on single-item batch — failing item %d.", batch[0].item_id)
+            await self._queue.mark_failed(
+                batch[0],
+                "Out of memory — try reducing image size or number of steps.",
+            )
 
     def _apply_scheduler(self, pipeline, sampler: str) -> None:
         """Swap the pipeline scheduler in-place based on the sampler name."""

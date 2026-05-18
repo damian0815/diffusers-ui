@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "tqdm",
+    "compel>=2.3.1",
 ]
 
 [project.optional-dependencies]

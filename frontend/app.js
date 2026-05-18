@@ -74,6 +74,11 @@ function app() {
         }
         this.previewProgress = total_steps > 0 ? step / total_steps : 0;
       });
+
+      // Keep the browser tab title in sync with pending job count.
+      this.$watch('queueItems', (items) => {
+        document.title = items.length > 0 ? `(${items.length}) diffusers-ui` : 'diffusers-ui';
+      });
     },
 
     // ----------------------------------------------------------------
@@ -200,6 +205,25 @@ function app() {
         await fetch(`/api/v1/queue/default/i/${itemId}`, { method: 'DELETE' });
         await this.loadQueueDetails();
       } catch (e) { this.errorMessage = 'Could not cancel item.'; }
+    },
+
+    async moveToFront(itemId) {
+      try {
+        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/move_front`, { method: 'PUT' });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.loadQueueDetails();
+      } catch (e) { this.errorMessage = `Could not move item to front: ${e.message}`; }
+    },
+
+    async resubmitItem(itemId) {
+      try {
+        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/resubmit?prepend=true`, { method: 'POST' });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        this.queueItems.push(data.item_id);
+        this._pollItem(data.item_id);
+        await this.loadQueueDetails();
+      } catch (e) { this.errorMessage = `Could not resubmit: ${e.message}`; }
     },
 
     async pruneQueue() {

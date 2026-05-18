@@ -354,6 +354,9 @@ select option { background: var(--surface); }
   border: 1px solid var(--border);
   border-radius: var(--r);
   padding: 6px 10px;
+  /* fixed height so the panel layout never jumps when the queue empties */
+  min-height: 32px;
+  flex-shrink: 0;
 }
 
 .checkbox-label {
@@ -466,7 +469,7 @@ select option { background: var(--surface); }
   width: 100%; height: 100%;
   object-fit: contain;
 }
-#main-image.is-loading { filter: blur(14px); }
+#main-image.is-loading { /*filter: blur(14px);*/ }
 
 #no-image-placeholder {
   position: absolute; inset: 0;

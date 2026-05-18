@@ -119,3 +119,31 @@ async def list_queue(queue_id: str, request: Request):
         ],
     }
 
+
+@router.post("/i/{item_id}/resubmit")
+async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: bool = True):
+    """
+    Create a fresh clone of an existing queue item and enqueue it.
+    Works on any item, regardless of status (useful for failed/cancelled/completed jobs).
+    Returns the new item_id.
+    """
+    queue = request.app.state.queue
+    item = queue.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Queue item {item_id} not found")
+    new_item = QueueItem(params=item.params)
+    await queue.enqueue(new_item, prepend=prepend)
+    return {"queue_id": queue_id, "item_id": new_item.item_id, "resubmitted_from": item_id}
+
+
+@router.put("/i/{item_id}/move_front")
+async def move_item_to_front(queue_id: str, item_id: int, request: Request):
+    """Move a pending queue item to the front of the queue."""
+    queue = request.app.state.queue
+    moved = await queue.move_to_front(item_id)
+    if not moved:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Item {item_id} is not pending or not found in queue"
+        )
+    return {"queue_id": queue_id, "item_id": item_id, "moved": True}
