@@ -65,6 +65,9 @@ class PipelineWorker:
         self._session_factory = session_factory
         self._default_board_id = default_board_id
         self._running = False
+        # _idle is SET when no generation is in flight; CLEARED while running one.
+        self._idle = asyncio.Event()
+        self._idle.set()
 
     async def run(self) -> None:
         """Main loop — drains queue continuously until stopped."""
@@ -79,13 +82,22 @@ class PipelineWorker:
             for batch in group_into_batches(items):
                 if not self._running:
                     break
+                self._idle.clear()
                 try:
                     await self._run_batch(batch)
                 except Exception:
                     logger.exception("Unhandled error in batch, continuing.")
+                finally:
+                    self._idle.set()
 
     async def stop(self) -> None:
+        """Signal the worker to stop and unblock any queue wait."""
         self._running = False
+        self._queue.abort_wait()
+
+    async def wait_idle(self) -> None:
+        """Wait until no generation is actively running (safe to exit after this)."""
+        await self._idle.wait()
 
     async def _run_batch(self, batch: list[QueueItem]) -> None:
         """Run a single batch: load model, generate, save, record."""

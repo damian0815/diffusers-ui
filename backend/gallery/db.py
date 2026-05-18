@@ -18,8 +18,9 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 async def init_db() -> None:
     """Create all tables. Called once at startup."""
-    # Import models so their metadata is registered before create_all
+    # Import all models so their metadata is registered before create_all
     import backend.gallery.models  # noqa: F401
+    import backend.queue.models    # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

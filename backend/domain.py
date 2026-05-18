@@ -53,6 +53,14 @@ def _next_id() -> int:
     return _counter
 
 
+def _init_counter(min_value: int) -> None:
+    """Ensure the counter never produces IDs ≤ min_value.
+    Called at startup after restoring persisted items."""
+    global _counter
+    if min_value > _counter:
+        _counter = min_value
+
+
 @dataclass
 class QueueItem:
     params: ImageGenerationParams

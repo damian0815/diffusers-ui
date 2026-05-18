@@ -9,8 +9,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import settings
+from backend.domain import _init_counter
 from backend.gallery.db import init_db, AsyncSessionLocal
 from backend.queue.manager import QueueManager
+from backend.queue.store import QueueStore
 from backend.model_registry.registry import ModelRegistry
 from backend.model_registry.loader import PipelineLoader
 from backend.pipeline.preview import PreviewBroadcaster
@@ -22,7 +24,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Application-level singletons (shared across requests via app.state)
 # ---------------------------------------------------------------------------
-queue_manager = QueueManager()
+queue_store   = QueueStore(session_factory=AsyncSessionLocal)
+queue_manager = QueueManager(store=queue_store)
 model_registry = ModelRegistry(settings.models_json)
 pipeline_loader = PipelineLoader()
 broadcaster = PreviewBroadcaster()
@@ -43,7 +46,7 @@ async def lifespan(app: FastAPI):
     settings.images_dir.mkdir(parents=True, exist_ok=True)
     settings.thumbnails_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set up database
+    # Set up database (creates tables if they don't exist)
     await init_db()
 
     # Create default gallery if none exist
@@ -53,18 +56,70 @@ async def lifespan(app: FastAPI):
     logger.info("Detected device: %s", settings.device)
     logger.info("Default gallery board_id: %s", default_board_id)
 
+    # Restore persisted queue state ------------------------------------------
+    await _restore_queue()
+
     # Start background worker
     task = asyncio.create_task(worker.run())
 
     yield
 
-    # Graceful shutdown
+    # ── Graceful shutdown ──────────────────────────────────────────────────
+    logger.info("Shutdown requested — waiting for current generation to finish…")
+
+    # 1. Tell the worker to stop accepting new items and unblock its queue wait.
     await worker.stop()
+
+    # 2. Wait for any in-flight generation to complete (up to 10 minutes).
+    try:
+        await asyncio.wait_for(worker.wait_idle(), timeout=600.0)
+        logger.info("Current generation finished cleanly.")
+    except asyncio.TimeoutError:
+        logger.warning("Shutdown timeout exceeded — forcing exit.")
+
+    # 3. Cancel the now-idle worker task.
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
+
+    logger.info("Shutdown complete.")
+
+
+async def _restore_queue() -> None:
+    """Load persisted queue items from the DB and repopulate the in-memory queue."""
+    try:
+        # Any item left in 'processing' state means the server was killed mid-run;
+        # reset it to 'pending' so it will be re-generated on this run.
+        await queue_store.reset_interrupted()
+
+        items = await queue_store.load_all()
+        if not items:
+            return
+
+        pending_count = 0
+        for item in items:
+            queue_manager._all_items[item.item_id] = item
+            if item.status.value == "pending":
+                queue_manager._queue.append(item)
+                pending_count += 1
+
+        # Prevent future IDs from colliding with restored IDs.
+        max_id = max(i.item_id for i in items)
+        _init_counter(max_id)
+
+        # Wake the worker if there are pending items to process.
+        if pending_count:
+            queue_manager._new_item_event.set()
+
+        logger.info(
+            "Restored %d queue items from DB (%d pending).",
+            len(items),
+            pending_count,
+        )
+    except Exception:
+        logger.exception("Failed to restore queue from DB — starting with empty queue.")
 
 
 async def _ensure_default_gallery() -> str:
@@ -100,4 +155,3 @@ app.include_router(websocket.router)
 _frontend_dir = Path(__file__).parent.parent / "frontend"
 if _frontend_dir.exists():
     app.mount("/", StaticFiles(directory=str(_frontend_dir), html=True), name="frontend")
-
