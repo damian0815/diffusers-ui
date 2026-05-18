@@ -20,6 +20,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gpu = [
+    # Install on CUDA machines for xformers memory-efficient attention:
+    #   uv pip install "diffusers-ui[gpu]"
+    "xformers>=0.0.26",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

@@ -36,6 +36,7 @@ class PipelineLoader:
             self._pipeline = DiffusionPipeline.from_pretrained(
                 entry.source, **kwargs
             ).to(device=settings.device, dtype=settings.dtype)
+            _enable_fast_attention(self._pipeline)
             self._loaded_key = entry.key
         except Exception as exc:
             raise PipelineLoadError(
@@ -64,4 +65,36 @@ def _dtype_for_device(device: str):
     if device == "cpu":
         return torch.float32
     return torch.float16
+
+
+def _enable_fast_attention(pipeline) -> None:
+    """
+    Attempt to enable the fastest available attention implementation.
+
+    Priority order:
+    1. xformers memory-efficient attention (explicit install, fastest on Ampere)
+    2. PyTorch 2.0+ native SDPA / Flash Attention (automatic when using torch >= 2.0)
+    3. Fall back to standard attention silently.
+    """
+    # xformers — fastest for float16 on Ampere (RTX 3090 etc.)
+    try:
+        import xformers  # noqa: F401
+        pipeline.enable_xformers_memory_efficient_attention()
+        logging.info("xformers memory-efficient attention enabled.")
+        return
+    except Exception as exc:
+        logging.info("xformers not available (%s); trying PyTorch SDPA.", exc)
+
+    # PyTorch 2.x+ SDPA — automatically uses Flash Attention 2 when available.
+    # Just enabling the flag here; diffusers uses it via the attention_processor.
+    try:
+        import torch
+        if hasattr(torch.backends, "cuda") and int(torch.__version__.split(".")[0]) >= 2:
+            # attempt_enable_mem_efficient_sdp / enable_flash_sdp are best-effort
+            torch.backends.cuda.enable_flash_sdp(True)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+            logging.info("PyTorch SDPA (Flash Attention) enabled.")
+    except Exception as exc:
+        logging.info("Could not configure PyTorch SDPA: %s", exc)
+
 
