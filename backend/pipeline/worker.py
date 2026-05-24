@@ -13,6 +13,7 @@ from backend.domain import QueueItem, ItemStatus
 from backend.pipeline.batcher import group_into_batches
 from backend.pipeline.preview import latents_to_preview_image, PreviewBroadcaster
 from backend.pipeline.compel_encoder import build_prompt_embeds
+from backend.pipeline.mem_stats import MemoryAdvisor
 
 if TYPE_CHECKING:
     from backend.queue.manager import QueueManager
@@ -96,9 +97,9 @@ class PipelineWorker:
         # _idle is SET when no generation is in flight; CLEARED while running one.
         self._idle = asyncio.Event()
         self._idle.set()
-        # Maximum items per pipeline call; 0 = unlimited.
-        # Automatically halved on CUDA/MPS out-of-memory to avoid repeated OOM.
-        self._max_batch_size: int = 0
+        # Adaptive batch-size advisor: starts at probe=1, ramps up by +1 on each
+        # successful run, regresses on OOM, and fits a power-law memory model.
+        self._mem_advisor = MemoryAdvisor(device=settings.device)
 
     async def run(self) -> None:
         """Main loop — drains queue continuously until stopped."""
@@ -110,7 +111,9 @@ class PipelineWorker:
                 break
             if not items:
                 continue
-            for batch in group_into_batches(items, max_size=self._max_batch_size):
+            def _max_size_fn(crit):
+                return self._mem_advisor.get_max_batch_size(crit.width * crit.height)
+            for batch in group_into_batches(items, max_size=_max_size_fn):
                 if not self._running:
                     break
                 self._idle.clear()
@@ -216,7 +219,7 @@ class PipelineWorker:
         try:
             import torch
             generators = [
-                torch.Generator(device=settings.device).manual_seed(s)
+                torch.Generator(device=settings.seed_device).manual_seed(s)
                 for s in seeds
             ]
             if isinstance(pipeline.scheduler,
@@ -226,20 +229,42 @@ class PipelineWorker:
                 assert pipeline.scheduler.config.time_shift_type == 'linear'
                 shift = 1.0 + 0.5 * (image_pixel_count / 1024 ** 2)
                 pipeline.scheduler.set_shift(shift)
-                # pipe.scheduler = type(pipe.scheduler).from_config(pipe.scheduler.config, shift=shift)
-                # print("updated scheduler with shift", shift)
 
-            result = await asyncio.to_thread(
-                pipeline,
-                **prompt_kwargs,
-                width=params.width,
-                height=params.height,
-                num_inference_steps=params.steps,
-                guidance_scale=params.cfg,
-                generator=generators,
-                callback_on_step_end=on_step,
-                callback_on_step_end_tensor_inputs=["latents"],
+            # Reset peak-memory counter immediately before the pipeline call so
+            # that capture_peak() below reflects only this inference run.
+            self._mem_advisor.reset_peak()
+
+            # AMP autocast: resolves mixed float16/float32 dtype mismatches
+            # (e.g. float16 latents hitting float32 VAE biases) without
+            # manually upcasting any module.  No-op on CPU/MPS.
+            import contextlib
+            _device_type = settings.device if not settings.device.startswith("cuda") else "cuda"
+            _autocast_ctx = (
+                torch.amp.autocast(device_type=_device_type, dtype=torch.float16)
+                if settings.device.startswith("cuda")
+                else contextlib.nullcontext()
             )
+
+            def _run_pipeline():
+                with _autocast_ctx:
+                    return pipeline(
+                        **prompt_kwargs,
+                        width=params.width,
+                        height=params.height,
+                        num_inference_steps=params.steps,
+                        guidance_scale=params.cfg,
+                        generator=generators,
+                        callback_on_step_end=on_step,
+                        callback_on_step_end_tensor_inputs=["latents"],
+                    )
+
+            result = await asyncio.to_thread(_run_pipeline)
+
+            # Capture peak memory and record the run in the advisor.
+            peak_bytes = self._mem_advisor.capture_peak()
+            pixel_area = params.width * params.height
+            self._mem_advisor.record_success(pixel_area, len(batch), peak_bytes)
+
             for item, pil_image in zip(batch, result.images):
                 image_name = await asyncio.to_thread(_save_image, pil_image)
                 await self._queue.mark_completed(item, image_name)
@@ -260,10 +285,10 @@ class PipelineWorker:
 
         Strategy:
         - Free the VRAM cache immediately.
-        - If the batch has more than one item, halve ``_max_batch_size`` and
-          re-enqueue all items at the front of the queue so they are retried
-          at a smaller batch size on the next pass.
-        - If the batch is already a single item, it can't be split further;
+        - Notify the MemoryAdvisor so it regresses the probe batch size.
+        - If the batch has more than one item, re-enqueue all items at the
+          front of the queue so they are retried with the reduced batch size.
+        - If the batch is already a single item it cannot be split further;
           mark it as failed with a clear OOM message.
         """
         import torch
@@ -273,18 +298,17 @@ class PipelineWorker:
         except Exception:
             pass
 
+        # Tell the advisor: probe should step back to failed_batch_size − 1.
+        self._mem_advisor.record_oom(len(batch))
+
         if len(batch) > 1:
-            new_max = max(1, len(batch) // 2)
-            # Only ever reduce, never increase.
-            if self._max_batch_size == 0 or new_max < self._max_batch_size:
-                self._max_batch_size = new_max
             logger.warning(
-                "OOM with batch size %d — reducing max batch size to %d and requeuing.",
-                len(batch), self._max_batch_size,
+                "OOM with batch size %d — reducing probe to %d and requeuing.",
+                len(batch), self._mem_advisor._probe_batch_size,
             )
             await self._queue.requeue_items(batch, prepend=True)
         else:
-            logger.error("OOM on single-item batch — failing item %d.", batch[0].item_id)
+            logger.error("OOM on single-item batch — failing item %s.", batch[0].item_id)
             await self._queue.mark_failed(
                 batch[0],
                 "Out of memory — try reducing image size or number of steps.",
@@ -316,17 +340,40 @@ class PipelineWorker:
     async def _record_in_gallery(
         self, item: QueueItem, image_name: str, model_name: str
     ) -> None:
-        """Record a completed image in the gallery database."""
-        if self._session_factory is None or self._default_board_id is None:
+        """Record a completed image in the gallery database and broadcast the event."""
+        board_id = item.params.board_id or self._default_board_id
+        if self._session_factory is None or board_id is None:
             return
         try:
             from backend.gallery.service import GalleryService
             async with self._session_factory() as session:
                 service = GalleryService(session)
-                await service.record_image(
-                    item, image_name, self._default_board_id, model_name
+                record = await service.record_image(
+                    item, image_name, board_id, model_name
                 )
                 await session.commit()
+                # Build event payload (same shape as _image_record_to_dict / _image_record_to_dict)
+                created_at = record.created_at.isoformat() if record.created_at else None
+                event_data = {
+                    "image_name": image_name,
+                    "board_id": board_id,
+                    "prompt": item.params.prompt,
+                    "negative_prompt": item.params.negative_prompt,
+                    "seed": item.params.seed,
+                    "width": item.params.width,
+                    "height": item.params.height,
+                    "steps": item.params.steps,
+                    "cfg": item.params.cfg,
+                    "cfg_rescale_multiplier": item.params.cfg_rescale_multiplier,
+                    "sampler": item.params.sampler,
+                    "model_key": item.params.model_key,
+                    "model_name": model_name,
+                    "starred": False,
+                    "gen_seq": record.gen_seq,
+                    "created_at": created_at,
+                    "tags": [],
+                }
+            await self._broadcaster.broadcast_event("image_created", event_data)
         except Exception:
             logger.exception("Failed to record image %r in gallery", image_name)
 

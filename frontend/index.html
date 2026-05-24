@@ -62,10 +62,15 @@
         <div class="panel-scroll">
 
           <div class="row generate-row">
-            <button class="btn-primary" @click="generate(false)" title="Generate  ·  ⌘↩">
-              ▶ Generate
+            <button class="btn-primary"
+                    @click="generate(false)"
+                    :disabled="isEnqueuing || !modelKey"
+                    :class="{'is-loading': isEnqueuing}"
+                    title="Generate  ·  ⌘↩">
+              <span x-text="isEnqueuing ? '· · ·' : '▶ Generate'"></span>
             </button>
             <button class="icon-btn generate-priority" @click="generate(true)"
+                    :disabled="isEnqueuing"
                     title="Front of queue  ·  ⌘⇧↩">⏫</button>
           </div>
 
@@ -107,11 +112,30 @@
             <button class="icon-btn" title="Randomise" @click="seed = -1">🎲</button>
           </div>
 
+          <div class="field-group">
+            <label class="field-label">Aspect Ratio</label>
+            <select x-model="selectedAspectRatio"
+                    @change="onAspectRatioSelect($event.target.value)"
+                    class="ar-select">
+              <option value="custom">── Custom ──</option>
+              <option value="1:1">1∶1  Square</option>
+              <option value="5:4">5∶4</option>
+              <option value="4:3">4∶3</option>
+              <option value="3:2">3∶2  Landscape</option>
+              <option value="16:9">16∶9  Wide</option>
+              <option value="4:5">4∶5</option>
+              <option value="3:4">3∶4</option>
+              <option value="2:3">2∶3  Portrait</option>
+              <option value="9:16">9∶16  Story</option>
+            </select>
+          </div>
+
           <div class="row">
             <div class="field">
               <label class="field-label">Width</label>
               <input type="number" x-model.number="width" step="64" min="256" max="2048">
             </div>
+            <button class="icon-btn swap-btn" @click="swapDimensions()" title="Swap width ↔ height">⇅</button>
             <div class="field">
               <label class="field-label">Height</label>
               <input type="number" x-model.number="height" step="64" min="256" max="2048">
@@ -120,21 +144,6 @@
                     @click="toggleLockAspectRatio()"
                     :title="lockAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio'">🔒</button>
           </div>
-
-          <select x-model="selectedAspectRatio"
-                  @change="onAspectRatioSelect($event.target.value)"
-                  class="ar-select">
-            <option value="custom">── Custom ──</option>
-            <option value="1:1">1∶1  Square</option>
-            <option value="5:4">5∶4</option>
-            <option value="4:3">4∶3</option>
-            <option value="3:2">3∶2  Landscape</option>
-            <option value="16:9">16∶9  Wide</option>
-            <option value="4:5">4∶5</option>
-            <option value="3:4">3∶4</option>
-            <option value="2:3">2∶3  Portrait</option>
-            <option value="9:16">9∶16  Story</option>
-          </select>
 
           <div class="row">
             <div class="field">
@@ -302,8 +311,11 @@
           </div>
         </div>
 
-        <div id="progress-bar" x-show="previewProgress > 0 && previewProgress < 1">
-          <div id="progress-fill" :style="`width: ${previewProgress * 100}%`"></div>
+        <div id="progress-bar" x-show="isGenerating" x-transition:leave.duration.400ms>
+          <div id="progress-fill"
+               :class="{'indeterminate': previewProgress === 0}"
+               :style="previewProgress > 0 ? `width: ${previewProgress * 100}%` : ''">
+          </div>
         </div>
       </div>
 
@@ -314,7 +326,7 @@
 
     <!-- ── RIGHT: Gallery ── -->
     <aside id="gallery-panel"
-           x-data="gallery()"
+           x-data="gallery"
            x-on:select-image.window="handleExternalSelect($event)">
 
       <div class="collapsed-strip">
@@ -327,7 +339,7 @@
           <div class="row">
             <select id="board-select" x-model="selectedBoardId" @change="onBoardChange()">
               <template x-for="g in galleries" :key="g.board_id">
-                <option :value="g.board_id" x-text="g.name"></option>
+                <option :value="g.board_id" x-text="g.board_name"></option>
               </template>
             </select>
             <button class="icon-btn" title="New gallery" @click="createGallery()">+</button>
@@ -347,19 +359,34 @@
             <button class="icon-btn sm" @click="thumbsPerRow = Math.max(1, thumbsPerRow - 1)">−</button>
             <span class="cols-value" x-text="thumbsPerRow"></span>
             <button class="icon-btn sm" @click="thumbsPerRow = Math.min(8, thumbsPerRow + 1)">+</button>
+            <span class="gallery-total" x-show="total > 0" x-text="`${total} images`"></span>
           </div>
         </div>
 
         <div id="gallery-contents">
           <div id="thumbnail-grid"
                :style="`grid-template-columns: repeat(${thumbsPerRow}, 1fr)`">
-            <template x-for="img in images" :key="img.image_name">
+            <template x-for="(img, idx) in images" :key="img.image_name">
               <div class="thumb-wrapper"
-                   :class="{selected: selectedImageName === img.image_name}"
-                   @click="selectImage(img.image_name)">
+                   :class="{selected: selectedImageName === img.image_name, 'is-dragging': _dragSrcIdx === idx}"
+                   @click="selectImage(img.image_name)"
+                   draggable="true"
+                   @dragstart="onDragStart(idx, $event)"
+                   @dragover.prevent="onDragOver(idx, $event)"
+                   @drop.prevent="onDrop(idx)"
+                   @dragend="onDragEnd()">
                 <img :src="`/api/v1/images/i/${img.image_name}/thumbnail`"
                      :alt="img.prompt" loading="lazy">
                 <span x-show="img.starred" class="star-badge">⭐</span>
+                <div class="thumb-actions">
+                  <button class="thumb-action-btn"
+                          @click.stop="starImage(img.image_name, !img.starred)"
+                          :title="img.starred ? 'Unstar' : 'Star'"
+                          x-text="img.starred ? '⭐' : '☆'"></button>
+                  <button class="thumb-action-btn danger"
+                          @click.stop="deleteImage(img.image_name)"
+                          title="Delete">🗑</button>
+                </div>
               </div>
             </template>
           </div>
@@ -409,7 +436,10 @@
 
       <div x-show="queueDetails.length > 0" class="queue-list">
         <template x-for="item in queueDetails" :key="item.item_id">
-          <div class="queue-row" :class="`status-${item.status}`">
+          <div class="queue-row" :class="`status-${item.status}`"
+               x-transition:enter="row-enter"
+               x-transition:enter-start="row-enter-start"
+               x-transition:enter-end="row-enter-end">
             <div class="queue-status-col">
               <span class="status-dot" :class="item.status"></span>
               <span class="status-label" x-text="item.status"></span>
@@ -461,71 +491,90 @@
         <span class="fs-subtitle"
               x-text="models.length ? `${models.length} registered` : 'No models registered'"></span>
       </div>
-      <div class="fs-header-actions">
-        <button class="btn-secondary" @click="scanHfCache()">🔍 Scan HF Cache</button>
-      </div>
     </div>
 
-    <div class="fs-body models-layout">
+    <div class="fs-body">
+      <div class="models-list">
 
-      <!-- Registered models -->
-      <section class="models-section">
-        <h2 class="section-heading">Registered</h2>
-        <p x-show="models.length === 0" class="hint" style="padding:16px 0">
-          No models registered yet. Use Discover to add one.
+        <!-- ── Discover bar ── -->
+        <div class="models-discover-bar">
+          <input type="text" x-model="localScanPath" placeholder="/path/to/local/models">
+          <button class="btn-secondary" @click="scanLocalDir()">📁 Scan Dir</button>
+          <button class="btn-secondary" @click="scanHfCache()">🔍 Scan HF Cache</button>
+        </div>
+
+        <!-- Empty discover state -->
+        <p x-show="candidates.length === 0 && !scanDone" class="hint" style="margin:4px 0 8px">
+          Scan HF Cache or a local directory to discover models.
         </p>
-        <div class="models-grid">
-          <template x-for="m in models" :key="m.key">
-            <div class="model-card">
-              <div class="model-card-body">
-                <span class="model-card-name" x-text="m.name"></span>
-                <span class="model-card-base" x-text="m.base"></span>
-                <span class="model-card-source" x-text="m.source" title="Source path"></span>
-              </div>
-              <div class="model-card-actions">
-                <button class="icon-btn danger" title="Delete model"
-                        @click="deleteModel(m.key)">🗑</button>
+        <p x-show="candidates.length === 0 && scanDone" class="hint" style="margin:4px 0 8px">
+          No new models found.
+        </p>
+
+        <!-- Candidate rows -->
+        <template x-for="(c, idx) in candidates" :key="idx">
+          <div class="model-discover-row" :class="{'is-installed': isInstalled(c)}">
+            <div class="model-discover-body">
+              <div class="model-discover-name" x-text="c.name"></div>
+              <div class="model-discover-meta">
+                <span class="model-base-badge" x-text="c.base"></span>
+                <span class="model-discover-source" x-text="c.source"></span>
               </div>
             </div>
-          </template>
-        </div>
-      </section>
-
-      <!-- Discover / add models -->
-      <section class="models-section discover-section">
-        <h2 class="section-heading">Discover</h2>
-
-        <div class="row" style="margin-bottom:8px">
-          <input type="text" x-model="localScanPath" placeholder="/path/to/local/models"
-                 style="flex:1">
-          <button class="btn-secondary" @click="scanLocalDir()">📁 Scan Dir</button>
-        </div>
-
-        <div x-show="candidates.length === 0" class="hint" style="margin-top:8px">
-          Scan your HF cache or a local directory to discover models.
-        </div>
-
-        <div x-show="candidates.length > 0">
-          <div class="candidates-header">
-            <span class="section-heading" style="margin:0">Candidates
-              <span class="candidates-count" x-text="`(${candidates.length})`"></span>
-            </span>
-            <button class="link-btn" @click="candidates = []">Dismiss all</button>
+            <button class="btn-secondary"
+                    :disabled="isInstalled(c)"
+                    @click="registerCandidate(c)"
+                    x-text="isInstalled(c) ? '✓ Installed' : '+ Add'"></button>
           </div>
-          <div class="candidates-grid">
-            <template x-for="(c, idx) in candidates" :key="idx">
-              <div class="candidate-card">
-                <div class="candidate-card-body">
-                  <span class="candidate-name" x-text="c.name"></span>
-                  <span class="candidate-source" x-text="c.source"></span>
-                </div>
-                <button class="btn-secondary" @click="registerCandidate(c)">+ Add</button>
+        </template>
+
+        <!-- ── Divider ── -->
+        <div class="models-divider">
+          <span>Installed</span>
+          <span x-show="models.length > 0" x-text="`(${models.length})`" class="models-divider-count"></span>
+        </div>
+
+        <!-- Empty installed state -->
+        <p x-show="models.length === 0" class="hint" style="margin:4px 0">
+          No models registered. Use Scan above to discover models.
+        </p>
+
+        <!-- Installed model rows -->
+        <template x-for="m in models" :key="m.key">
+          <div class="model-row" :class="{'has-warning': m.files_missing}">
+            <div class="model-row-header">
+              <span x-show="m.files_missing" class="model-warning" title="Files not found at the registered path">⚠</span>
+              <span x-show="modelEditingKey !== m.key"
+                    class="model-row-name" x-text="m.name"></span>
+              <input x-show="modelEditingKey === m.key"
+                     class="model-name-input"
+                     x-model="modelEditName"
+                     @keydown.enter="commitRename(m.key)"
+                     @keydown.escape="modelEditingKey = null"
+                     @blur="commitRename(m.key)"
+                     :id="`name-input-${m.key}`">
+              <div class="model-row-actions">
+                <button class="icon-btn sm"
+                        x-show="modelEditingKey !== m.key"
+                        @click="startEdit(m)"
+                        title="Rename">✎</button>
+                <button class="icon-btn sm"
+                        x-show="modelEditingKey === m.key"
+                        @click="commitRename(m.key)"
+                        title="Save name">✓</button>
+                <button class="icon-btn sm danger"
+                        @click="deleteModel(m.key)"
+                        title="Delete model">🗑</button>
               </div>
-            </template>
+            </div>
+            <div class="model-row-meta">
+              <span class="model-base-badge" x-text="m.base"></span>
+              <span class="model-row-source" x-text="m.source"></span>
+            </div>
           </div>
-        </div>
-      </section>
+        </template>
 
+      </div>
     </div><!-- /fs-body -->
   </div><!-- /#models-view -->
 

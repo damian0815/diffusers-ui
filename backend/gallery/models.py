@@ -54,6 +54,10 @@ class ImageRecord(Base):
     model_key = Column(String, default="")
     model_name = Column(String, default="")
 
+    # Monotonically increasing enqueue order (= QueueItem.item_id).
+    # NULL for images created before this column was added.
+    gen_seq = Column(Integer, nullable=True, index=True)
+
     starred = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     tags = relationship("Tag", secondary=image_tags, back_populates="images")

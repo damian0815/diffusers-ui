@@ -22,12 +22,19 @@ function app() {
     displaySrc: null,
     imageLoading: false,
     previewProgress: 0,
+    isGenerating: false,     // true while at least one job is being polled
+    isEnqueuing: false,      // true during the enqueue network request
+    _activePolls: 0,         // count of in-flight _pollItem loops
+    _isPreviewFrame: false,  // displaySrc is currently a live preview frame
     queueItems: [],
     queueDetails: [],
     _queueTimer: null,
     errorMessage: null,
     localScanPath: '',
     candidates: [],
+    scanDone: false,
+    modelEditingKey: null,
+    modelEditName: '',
     autoSelectLatest: true,
 
     // ---- Preview & aspect-ratio state ----
@@ -37,6 +44,19 @@ function app() {
     selectedAspectRatio: 'custom',
     _aspectRatioValue: null,
     _updatingAR: false,
+
+    // Known aspect ratios for fuzzy matching
+    _KNOWN_AR: [
+      { v: '1:1',  rw: 1,  rh: 1  },
+      { v: '5:4',  rw: 5,  rh: 4  },
+      { v: '4:3',  rw: 4,  rh: 3  },
+      { v: '3:2',  rw: 3,  rh: 2  },
+      { v: '16:9', rw: 16, rh: 9  },
+      { v: '4:5',  rw: 4,  rh: 5  },
+      { v: '3:4',  rw: 3,  rh: 4  },
+      { v: '2:3',  rw: 2,  rh: 3  },
+      { v: '9:16', rw: 9,  rh: 16 },
+    ],
 
     async init() {
       Layout.init();
@@ -56,28 +76,46 @@ function app() {
       });
 
       this.$watch('width', (val) => {
-        if (this._updatingAR || !this.lockAspectRatio || !this._aspectRatioValue) return;
-        this._updatingAR = true;
-        this.height = this._roundTo64(val / this._aspectRatioValue);
-        this._updatingAR = false;
+        if (this._updatingAR) return;
+        if (this.lockAspectRatio && this._aspectRatioValue) {
+          this._updatingAR = true;
+          this.height = this._roundTo64(val / this._aspectRatioValue);
+          this._updatingAR = false;
+        }
+        this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
       });
       this.$watch('height', (val) => {
-        if (this._updatingAR || !this.lockAspectRatio || !this._aspectRatioValue) return;
-        this._updatingAR = true;
-        this.width = this._roundTo64(val * this._aspectRatioValue);
-        this._updatingAR = false;
-      });
-
-      connectPreview(({ image_b64, step, total_steps }) => {
-        if (this.showPreview) {
-          this.displaySrc = `data:image/jpeg;base64,${image_b64}`;
+        if (this._updatingAR) return;
+        if (this.lockAspectRatio && this._aspectRatioValue) {
+          this._updatingAR = true;
+          this.width = this._roundTo64(val * this._aspectRatioValue);
+          this._updatingAR = false;
         }
-        this.previewProgress = total_steps > 0 ? step / total_steps : 0;
+        this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
       });
 
       // Keep the browser tab title in sync with pending job count.
       this.$watch('queueItems', (items) => {
         document.title = items.length > 0 ? `(${items.length}) diffusers-ui` : 'diffusers-ui';
+      });
+
+      connectPreview(({ image_b64, step, total_steps }) => {
+        if (this.showPreview) {
+          this.displaySrc = `data:image/jpeg;base64,${image_b64}`;
+          this._isPreviewFrame = true;
+        }
+        // Only update progress while actively generating; ignore stale frames
+        // that arrive after job completion.
+        if (this.isGenerating) {
+          this.previewProgress = total_steps > 0 ? step / total_steps : 0;
+        }
+      });
+
+      // Sync starred state when gallery updates it via hover action
+      window.addEventListener('image-star-updated', (e) => {
+        if (this.selectedImageMeta && this.selectedImageMeta.image_name === e.detail.imageName) {
+          this.selectedImageMeta = { ...this.selectedImageMeta, starred: e.detail.starred };
+        }
       });
     },
 
@@ -87,6 +125,15 @@ function app() {
 
     async generate(prepend = false) {
       if (!this.modelKey) { this.errorMessage = 'Please select a model first.'; return; }
+      if (this.isEnqueuing) return;
+
+      this.isEnqueuing = true;
+
+      // ── Optimistic update: bump the counter immediately so the badge and
+      //    title react before the server responds.
+      const tempId = `_opt_${Date.now()}`;
+      this.queueItems = [...this.queueItems, tempId];
+
       try {
         const resp = await fetch('/api/v1/queue/default/enqueue_batch', {
           method: 'POST',
@@ -95,9 +142,20 @@ function app() {
         });
         if (!resp.ok) throw new Error(await resp.text());
         const data = await resp.json();
-        this.queueItems.push(...data.item_ids);
-        for (const id of data.item_ids) this._pollItem(id);
-      } catch (err) { this.errorMessage = `Generation failed: ${err.message}`; }
+
+        // Replace the optimistic placeholder with the real item IDs.
+        const realIds = data.items.map(i => i.item_id);
+        this.queueItems = [
+          ...this.queueItems.filter(id => id !== tempId),
+          ...realIds,
+        ];
+        for (const id of realIds) this._pollItem(id);
+      } catch (err) {
+        this.queueItems = this.queueItems.filter(id => id !== tempId);
+        this.errorMessage = `Generation failed: ${err.message}`;
+      } finally {
+        this.isEnqueuing = false;
+      }
     },
 
     _buildEnqueueBody(prepend) {
@@ -114,6 +172,9 @@ function app() {
     },
 
     async _pollItem(itemId) {
+      this._activePolls++;
+      this.isGenerating = true;
+
       const POLL_MS = 1000;
       while (true) {
         await new Promise(r => setTimeout(r, POLL_MS));
@@ -122,7 +183,6 @@ function app() {
           if (!resp.ok) break;
           const data = await resp.json();
           if (data.status === 'completed') {
-            this.previewProgress = 0;
             this.queueItems = this.queueItems.filter(id => id !== itemId);
             this.$dispatch('image-completed', { imageName: data.output_image_name });
             if (this.autoSelectLatest && data.output_image_name) {
@@ -136,6 +196,12 @@ function app() {
             break;
           }
         } catch (e) { break; }
+      }
+
+      this._activePolls = Math.max(0, this._activePolls - 1);
+      if (this._activePolls === 0) {
+        this.isGenerating = false;
+        this.previewProgress = 0;
       }
     },
 
@@ -154,15 +220,48 @@ function app() {
     },
 
     selectImageFromEvent(event) {
-      const { imageName } = event.detail;
+      const { imageName, fromGallery = false } = event.detail;
+
+      // Null imageName → clear the panel (e.g. when a deletion removes the selected image)
+      if (!imageName) {
+        this.selectedImageName = null;
+        this.selectedImageMeta = null;
+        if (!this._isPreviewFrame) this.displaySrc = null;
+        this.imageLoading = false;
+        return;
+      }
+
       this.selectedImageName = imageName;
       this._loadImageMeta(imageName);
       this.imageLoading = true;
-      this.displaySrc = `/api/v1/images/i/${imageName}/thumbnail`;
+
       const fullUrl = `/api/v1/images/i/${imageName}/full`;
+
+      // For gallery clicks (or when there's no current image), show the
+      // thumbnail immediately for responsive feel.
+      // For auto-select on generation completion, keep the live preview frame
+      // visible — it's already the best approximation of the result — and
+      // atomically swap to the full image once it's ready.
+      if (fromGallery || !this.displaySrc) {
+        this.displaySrc = `/api/v1/images/i/${imageName}/thumbnail`;
+        this._isPreviewFrame = false;
+      }
+
       const img = new Image();
-      img.onload = () => { if (this.selectedImageName === imageName) { this.displaySrc = fullUrl; this.imageLoading = false; } };
-      img.onerror = () => { this.imageLoading = false; };
+      img.onload = () => {
+        if (this.selectedImageName === imageName) {
+          this.displaySrc = fullUrl;
+          this.imageLoading = false;
+          this._isPreviewFrame = false;
+        }
+      };
+      img.onerror = () => {
+        if (!this.displaySrc || this._isPreviewFrame) {
+          this.displaySrc = `/api/v1/images/i/${imageName}/thumbnail`;
+          this._isPreviewFrame = false;
+        }
+        this.imageLoading = false;
+      };
       img.src = fullUrl;
     },
 
@@ -262,7 +361,7 @@ function app() {
       try {
         const data = await (await fetch('/api/v2/models/scan_hf_cache')).json();
         this.candidates = data.candidates || [];
-        if (!this.candidates.length) this.errorMessage = 'No HF cache candidates found.';
+        this.scanDone = true;
       } catch (e) { this.errorMessage = `Scan failed: ${e.message}`; }
     },
 
@@ -271,8 +370,12 @@ function app() {
       try {
         const data = await (await fetch(`/api/v2/models/scan_local_dir?path=${encodeURIComponent(this.localScanPath)}`)).json();
         this.candidates = data.candidates || [];
-        if (!this.candidates.length) this.errorMessage = 'No pipeline directories found.';
+        this.scanDone = true;
       } catch (e) { this.errorMessage = `Scan failed: ${e.message}`; }
+    },
+
+    isInstalled(candidate) {
+      return this.models.some(m => m.source === candidate.source);
     },
 
     async registerCandidate(candidate) {
@@ -283,7 +386,6 @@ function app() {
         });
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
-        this.candidates = this.candidates.filter(c => c.source !== candidate.source);
       } catch (e) { this.errorMessage = `Register failed: ${e.message}`; }
     },
 
@@ -296,13 +398,62 @@ function app() {
       } catch (e) { this.errorMessage = 'Could not delete model.'; }
     },
 
+    startEdit(m) {
+      this.modelEditingKey = m.key;
+      this.modelEditName = m.name;
+      this.$nextTick(() => {
+        document.getElementById(`name-input-${m.key}`)?.focus();
+      });
+    },
+
+    async commitRename(key) {
+      const name = this.modelEditName.trim();
+      this.modelEditingKey = null;
+      if (!name) return;
+      const current = this.models.find(m => m.key === key);
+      if (current && current.name === name) return;
+      try {
+        const resp = await fetch(`/api/v2/models/${key}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.loadModels();
+      } catch (e) { this.errorMessage = `Rename failed: ${e.message}`; }
+    },
+
     // ----------------------------------------------------------------
     // Preview + aspect ratio
     // ----------------------------------------------------------------
 
-    togglePreview() { this.showPreview = !this.showPreview; },
+    togglePreview() {
+      this.showPreview = !this.showPreview;
+      if (!this.showPreview) {
+        // Preview turned off: show the selected gallery image or clear the panel.
+        this._isPreviewFrame = false;
+        if (this.selectedImageName) {
+          this.selectImageFromEvent({ detail: { imageName: this.selectedImageName, fromGallery: true } });
+        } else {
+          this.displaySrc = null;
+        }
+      }
+    },
 
     toggleInfoOverlay() { this.showInfoOverlay = !this.showInfoOverlay; },
+
+    swapDimensions() {
+      [this.width, this.height] = [this.height, this.width];
+    },
+
+    _detectAspectRatio(w, h) {
+      const TOL = 64;
+      for (const { v, rw, rh } of this._KNOWN_AR) {
+        if (Math.abs(h - Math.round(w * rh / rw)) <= TOL) return v;
+        if (Math.abs(w - Math.round(h * rw / rh)) <= TOL) return v;
+      }
+      return 'custom';
+    },
 
     adoptField(field) {
       const meta = this.selectedImageMeta;
@@ -366,7 +517,3 @@ function app() {
     },
   };
 }
-
-
-
-

@@ -20,6 +20,7 @@ class BatchParams(BaseModel):
     cfg_rescale_multiplier: float = 0.0
     sampler: str = "euler_a"
     model_key: str
+    board_id: str | None = None  # target gallery board; None = worker default
 
 
 class EnqueueRequest(BaseModel):
@@ -31,10 +32,11 @@ class EnqueueRequest(BaseModel):
 async def enqueue_batch(queue_id: str, body: EnqueueRequest, request: Request):
     """
     Enqueue one generation job. Accepts the batch body format.
-    Returns {"queue_id": str, "item_ids": [int]}.
+    Returns {"queue_id": str, "items": [<image-record-dict>]}.
     """
-    queue = request.app.state.queue
     import random
+    queue = request.app.state.queue
+    registry = request.app.state.registry
     seed = body.batch.seed if body.batch.seed >= 0 else random.randint(0, 2**32 - 1)
 
     params = ImageGenerationParams(
@@ -48,10 +50,18 @@ async def enqueue_batch(queue_id: str, body: EnqueueRequest, request: Request):
         cfg_rescale_multiplier=body.batch.cfg_rescale_multiplier,
         sampler=body.batch.sampler,  # type: ignore[arg-type]
         model_key=body.batch.model_key,
+        board_id=body.batch.board_id,
     )
     item = QueueItem(params=params)
     await queue.enqueue(item, prepend=body.prepend)
-    return {"queue_id": queue_id, "item_ids": [item.item_id]}
+
+    model_entry = registry.get(params.model_key)
+    model_name = model_entry.name if model_entry else None
+
+    return {
+        "queue_id": queue_id,
+        "items": [_queue_item_to_image_dict(item, model_name)],
+    }
 
 
 @router.get("/i/{item_id}")
@@ -147,3 +157,35 @@ async def move_item_to_front(queue_id: str, item_id: int, request: Request):
             detail=f"Item {item_id} is not pending or not found in queue"
         )
     return {"queue_id": queue_id, "item_id": item_id, "moved": True}
+
+
+def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
+    """
+    Return an image-record-shaped dict for a QueueItem.
+    Fields that are only known after generation (image_name, gen_seq,
+    created_at, starred, tags) are returned as None / empty defaults.
+    Extra queue fields (item_id, status) are included for caller convenience.
+    """
+    p = item.params
+    return {
+        "item_id": item.item_id,
+        "status": item.status.value,
+        "image_name": item.output_image_name,
+        "prompt": p.prompt,
+        "negative_prompt": p.negative_prompt,
+        "seed": p.seed,
+        "width": p.width,
+        "height": p.height,
+        "steps": p.steps,
+        "cfg": p.cfg,
+        "cfg_rescale_multiplier": p.cfg_rescale_multiplier,
+        "sampler": p.sampler,
+        "model_key": p.model_key,
+        "model_name": model_name,
+        "board_id": p.board_id,
+        "starred": False,
+        "gen_seq": None,
+        "created_at": None,
+        "tags": [],
+    }
+

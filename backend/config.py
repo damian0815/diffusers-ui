@@ -27,8 +27,9 @@ class Settings:
     db_url: str = "sqlite+aiosqlite:///gallery.db"
     thumbnail_size: tuple[int, int] = (256, 256)
     batch_window_s: float = 0.3   # how long to wait collecting items before batching
-    preview_every_n_steps: int = 5
+    preview_every_n_steps: int = 1
     device: str = field(default_factory=_detect_device)
+    seed_device: str = 'cpu'
 
     @property
     def dtype(self) -> torch.dtype:

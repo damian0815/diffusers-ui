@@ -1,6 +1,7 @@
 import io
 import json
 import base64
+import asyncio
 
 import torch
 from PIL import Image
@@ -119,18 +120,32 @@ class PreviewBroadcaster:
     Maintains a set of active WebSocket connections and broadcasts
     preview frames to all of them.
 
-    This class knows nothing about FastAPI — it just holds connections
-    and sends bytes. The WebSocket router manages add/remove.
+    Sends are fire-and-forget (asyncio.create_task).  If a connection still has
+    a send in-flight when the next frame arrives the new frame is silently
+    dropped for that client — this prevents slow consumers from stalling the
+    worker while keeping latency near-zero for fast consumers.
     """
 
     def __init__(self):
         self._connections: set = set()
+        self._sending: set = set()    # connections with a send currently in-flight
 
     def add(self, ws) -> None:
         self._connections.add(ws)
 
     def remove(self, ws) -> None:
         self._connections.discard(ws)
+        self._sending.discard(ws)
+
+    async def _deliver(self, ws, payload: str) -> None:
+        """Single-connection fire-and-forget send."""
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            # Connection died — evict it.
+            self._connections.discard(ws)
+        finally:
+            self._sending.discard(ws)
 
     async def broadcast(
         self,
@@ -140,16 +155,30 @@ class PreviewBroadcaster:
         jpeg_bytes: bytes,
     ) -> None:
         """Broadcast a preview frame to all connected clients."""
+        if not self._connections:
+            return
         payload = json.dumps({
+            "type": "preview",
             "item_id": item_id,
             "step": step,
             "total_steps": total_steps,
             "image_b64": base64.b64encode(jpeg_bytes).decode(),
         })
-        dead: set = set()
-        for ws in self._connections:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                dead.add(ws)
-        self._connections -= dead
+        for ws in list(self._connections):
+            if ws in self._sending:
+                continue          # client hasn't drained last frame — drop this one
+            self._sending.add(ws)
+            asyncio.create_task(self._deliver(ws, payload))
+
+    async def broadcast_event(self, event_type: str, data: dict) -> None:
+        """Broadcast a domain event to all connected clients (fire-and-forget).
+
+        Unlike preview frames, events are never dropped — each connected client
+        gets its own send task regardless of in-flight state.
+        """
+        if not self._connections:
+            return
+        payload = json.dumps({"type": "event", "event": event_type, "data": data})
+        for ws in list(self._connections):
+            asyncio.create_task(self._deliver(ws, payload))
+

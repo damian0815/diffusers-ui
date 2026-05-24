@@ -93,12 +93,19 @@ async def scan_local_dir_endpoint(path: str, request: Request):
 
 
 def _entry_to_dict(entry: ModelEntry) -> dict:
+    files_missing = False
+    if entry.source_type == "local_path":
+        from pathlib import Path
+        files_missing = not Path(entry.source).exists()
     return {
         "key": entry.key,
         "name": entry.name,
-        "base": entry.base,
+        "type": entry.base,
+        "hash": '',
+        "base": '',
         "source": entry.source,
         "source_type": entry.source_type,
         "has_api_key": entry.hf_api_key is not None,
+        "files_missing": files_missing,
     }
 

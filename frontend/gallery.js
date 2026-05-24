@@ -9,10 +9,12 @@ function gallery() {
     starredOnly: false,
     offset: 0,
     limit: 50,
+    total: 0,
     loading: false,
     hasMore: true,
     selectedImageName: null,
     thumbsPerRow: 3,
+    _dragSrcIdx: null,
 
     async init() {
       await this.loadGalleries();
@@ -20,6 +22,9 @@ function gallery() {
       this.setupArrowNav();
       window.addEventListener('image-completed', (e) => {
         this.prependImage(e.detail.imageName);
+      });
+      window.addEventListener('ws-gallery-event', (e) => {
+        this._handleWsEvent(e.detail);
       });
     },
 
@@ -38,7 +43,7 @@ function gallery() {
     onBoardChange() { this.resetAndLoad(); },
 
     resetAndLoad() {
-      this.images = []; this.offset = 0; this.hasMore = true;
+      this.images = []; this.offset = 0; this.total = 0; this.hasMore = true;
       this.loadMore();
     },
 
@@ -58,7 +63,9 @@ function gallery() {
         if (this.starredOnly) params.set('starred_only', 'true');
         const resp = await fetch(`/api/v1/images/?${params}`);
         if (!resp.ok) throw new Error(resp.statusText);
-        const batch = await resp.json();
+        const data = await resp.json();
+        const batch = data.items;
+        this.total = data.total;
         this.images.push(...batch);
         this.offset += batch.length;
         this.hasMore = batch.length === this.limit;
@@ -69,12 +76,16 @@ function gallery() {
     },
 
     async prependImage(imageName) {
+      if (this.images.some(i => i.image_name === imageName)) return; // already added via WS
       try {
         const resp = await fetch(`/api/v1/images/i/${imageName}/metadata`);
         if (resp.ok) {
           const meta = await resp.json();
-          this.images.unshift(meta);
-          this.offset += 1;
+          if (!this.images.some(i => i.image_name === meta.image_name)) {
+            this.images.unshift(meta);
+            this.offset += 1;
+            this.total += 1;
+          }
         }
       } catch (e) { this.resetAndLoad(); }
     },
@@ -107,21 +118,113 @@ function gallery() {
 
         if (newIdx !== idx) {
           this.selectImage(this.images[newIdx].image_name);
-          // Scroll selected thumbnail into view
           document.querySelectorAll('.thumb-wrapper')[newIdx]?.scrollIntoView({ block: 'nearest' });
         }
-        // Pre-load more images when nearing the end
         if (newIdx >= this.images.length - 10) this.loadMore();
       });
     },
 
     selectImage(imageName) {
       this.selectedImageName = imageName;
-      this.$dispatch('select-image', { imageName });
+      this.$dispatch('select-image', { imageName, fromGallery: true });
     },
 
     handleExternalSelect(event) {
       this.selectedImageName = event.detail.imageName;
+    },
+
+    // ── Hover actions ────────────────────────────────────────────────────
+
+    async starImage(imageName, starred) {
+      const img = this.images.find(i => i.image_name === imageName);
+      if (img) img.starred = starred; // optimistic
+      try {
+        const resp = await fetch(`/api/v1/images/i/${imageName}/star?starred=${starred}`, { method: 'PATCH' });
+        if (resp.ok) {
+          const updated = await resp.json();
+          if (img) img.starred = updated.starred;
+          this.$dispatch('image-star-updated', { imageName, starred: updated.starred });
+        }
+      } catch (e) {
+        if (img) img.starred = !starred; // revert
+      }
+    },
+
+    async deleteImage(imageName) {
+      if (!confirm('Delete this image?')) return;
+      try {
+        const resp = await fetch(`/api/v1/images/i/${imageName}`, { method: 'DELETE' });
+        if (!resp.ok) return;
+        this.images = this.images.filter(i => i.image_name !== imageName);
+        this.offset = Math.max(0, this.offset - 1);
+        this.total  = Math.max(0, this.total  - 1);
+        if (this.selectedImageName === imageName) {
+          this.selectedImageName = null;
+          this.$dispatch('select-image', { imageName: null, fromGallery: true });
+        }
+      } catch (e) {}
+    },
+
+    // ── Drag-and-drop reordering ─────────────────────────────────────────
+
+    onDragStart(idx, e) {
+      this._dragSrcIdx = idx;
+      e.dataTransfer.effectAllowed = 'move';
+    },
+
+    onDragOver(idx, e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    },
+
+    onDrop(idx) {
+      if (this._dragSrcIdx === null || this._dragSrcIdx === idx) {
+        this._dragSrcIdx = null;
+        return;
+      }
+      const imgs = [...this.images];
+      const [moved] = imgs.splice(this._dragSrcIdx, 1);
+      imgs.splice(idx, 0, moved);
+      this.images = imgs;
+      this._dragSrcIdx = null;
+    },
+
+    onDragEnd() { this._dragSrcIdx = null; },
+
+    // ── WebSocket event handler ──────────────────────────────────────────
+
+    _handleWsEvent(msg) {
+      const { event, data } = msg;
+      if (event === 'board_created') {
+        if (!this.galleries.some(g => g.board_id === data.board_id))
+          this.galleries.push(data);
+      } else if (event === 'board_renamed') {
+        const g = this.galleries.find(g => g.board_id === data.board_id);
+        if (g) g.board_name = data.board_name;
+      } else if (event === 'board_deleted') {
+        this.galleries = this.galleries.filter(g => g.board_id !== data.board_id);
+        if (this.selectedBoardId === data.board_id) {
+          this.selectedBoardId = this.galleries[0]?.board_id ?? null;
+          this.resetAndLoad();
+        }
+      } else if (event === 'image_created') {
+        if (data.board_id === this.selectedBoardId &&
+            !this.images.some(i => i.image_name === data.image_name)) {
+          this.images.unshift(data);
+          this.offset += 1;
+          this.total += 1;
+        }
+      } else if (event === 'image_deleted') {
+        if (this.images.some(i => i.image_name === data.image_name)) {
+          this.images = this.images.filter(i => i.image_name !== data.image_name);
+          this.offset = Math.max(0, this.offset - 1);
+          this.total = Math.max(0, this.total - 1);
+          if (this.selectedImageName === data.image_name) {
+            this.selectedImageName = null;
+            this.$dispatch('select-image', { imageName: null, fromGallery: true });
+          }
+        }
+      }
     },
 
     async createGallery() {
@@ -139,3 +242,9 @@ function gallery() {
     },
   };
 }
+
+// Register with Alpine so x-data="gallery" resolves reliably before DOM scan.
+document.addEventListener('alpine:init', () => {
+  Alpine.data('gallery', gallery);
+});
+

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -80,6 +80,7 @@ class GalleryService:
         image_name: str,
         board_id: str,
         model_name: str,
+        gen_seq: int | None = None,
     ) -> ImageRecord:
         """Persist a generated image record in the given gallery."""
         gallery = await self.get_gallery(board_id)
@@ -98,6 +99,7 @@ class GalleryService:
             sampler=p.sampler,
             model_key=p.model_key,
             model_name=model_name,
+            gen_seq=gen_seq,
         )
         self._session.add(record)
         await self._session.flush()
@@ -111,6 +113,33 @@ class GalleryService:
             .options(selectinload(ImageRecord.tags))
         )
         return result.scalar_one_or_none()
+
+    async def count_images(
+        self,
+        board_id: str,
+        search: str | None = None,
+        starred_only: bool = False,
+    ) -> int:
+        """Return the total number of images matching the given filters."""
+        gallery = await self.get_gallery(board_id)
+        gallery_id = gallery.id if gallery else None
+
+        query = select(func.count()).select_from(ImageRecord)
+        if gallery_id is not None:
+            query = query.where(ImageRecord.gallery_id == gallery_id)
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(
+                or_(
+                    ImageRecord.prompt.ilike(pattern),
+                    ImageRecord.negative_prompt.ilike(pattern),
+                )
+            )
+        if starred_only:
+            query = query.where(ImageRecord.starred == True)  # noqa: E712
+
+        result = await self._session.execute(query)
+        return result.scalar_one()
 
     async def list_images(
         self,
@@ -130,7 +159,7 @@ class GalleryService:
         query = (
             select(ImageRecord)
             .options(selectinload(ImageRecord.tags))
-            .order_by(ImageRecord.created_at.desc())
+            .order_by(ImageRecord.gen_seq.desc().nullslast(), ImageRecord.created_at.desc())
         )
         if gallery_id is not None:
             query = query.where(ImageRecord.gallery_id == gallery_id)
@@ -159,6 +188,24 @@ class GalleryService:
             .order_by(ImageRecord.created_at.desc())
         )
         return list(result.scalars().all())
+
+    async def delete_image(self, image_name: str) -> str | None:
+        """Delete an image record from the database. Returns the board_id it belonged to."""
+        record = await self.get_image(image_name)
+        if record is None:
+            raise ImageNotFoundError(f"Image {image_name!r} not found")
+        board_id: str | None = None
+        if record.gallery_id is not None:
+            from sqlalchemy import select as _select
+            from backend.gallery.models import Gallery as _Gallery
+            result = await self._session.execute(
+                _select(_Gallery).where(_Gallery.id == record.gallery_id)
+            )
+            g = result.scalar_one_or_none()
+            board_id = g.board_id if g else None
+        await self._session.delete(record)
+        await self._session.flush()
+        return board_id
 
     # ------------------------------------------------------------------
     # Stars & Tags

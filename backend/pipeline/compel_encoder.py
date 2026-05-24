@@ -18,7 +18,7 @@ Usage (SDXL):
 from __future__ import annotations
 
 import torch
-
+from compel import CompelForSDXL
 
 def build_prompt_embeds(
     pipeline,
@@ -53,18 +53,44 @@ def build_prompt_embeds(
     from compel import Compel, ReturnedEmbeddingsType
 
     if is_sdxl:
-        # SDXL has two text encoders:
-        #   tokenizer  + text_encoder   → CLIP ViT-L  (no pooled output used)
-        #   tokenizer_2 + text_encoder_2 → OpenCLIP ViT-bigG (pooled output used)
-        compel_proc = Compel(
-            tokenizer=[pipeline.tokenizer, pipeline.tokenizer_2],
-            text_encoder=[pipeline.text_encoder, pipeline.text_encoder_2],
-            returned_embeddings_type=ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
-            requires_pooled=[False, True],
-            truncate_long_prompts=False,
-        )
-        pos_embeds, pos_pooled = _encode_batch_sdxl(compel_proc, prompts)
-        neg_embeds, neg_pooled = _encode_batch_sdxl(compel_proc, neg_prompts)
+        # SDXL requires two *separate* Compel instances — one per text encoder.
+        # Using a single Compel with list inputs causes it to return a Python
+        # list of per-encoder tensors instead of a tensor, which breaks
+        # pad_conditioning_tensors_to_same_length (.shape access fails).
+        #
+        # Pattern mirrors CompelForSDXL in compel.convenience_wrappers:
+        #   compel_1 → CLIP ViT-L  (penultimate, no pooled, 768-dim)
+        #   compel_2 → OpenCLIP ViT-bigG (penultimate + pooled, 1280-dim)
+        # The two conditioning tensors are seq-length-aligned then concatenated
+        # on the hidden dimension → [B, S, 2048] expected by the SDXL pipeline.
+        compel = CompelForSDXL(pipeline)
+        #compel_1 = Compel(
+        #    tokenizer=pipeline.tokenizer,
+        #    text_encoder=pipeline.text_encoder,
+        #    returned_embeddings_type=ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
+        #    truncate_long_prompts=False,
+        #)
+        #compel_2 = Compel(
+        #    tokenizer=pipeline.tokenizer_2,
+        #    text_encoder=pipeline.text_encoder_2,
+        #    returned_embeddings_type=ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
+        #    requires_pooled=True,
+        #    truncate_long_prompts=False,
+        #)
+        #pos_embeds, pos_pooled = _encode_batch_sdxl(compel.compel_1, compel.compel_2, prompts)
+        #neg_embeds, neg_pooled = _encode_batch_sdxl(compel.compel_1, compel.compel_2, neg_prompts)
+
+        #full_padded = compel.compel_2.pad_conditioning_tensors_to_same_length(torch.cat([pos_embeds, neg_embeds]))
+        #split_pos = pos_embeds.shape[0]
+        #pos_embeds = full_padded[0:split_pos]
+        #neg_embeds = full_padded[split_pos:]
+
+
+        #compel.disable_no_weights_bypass()
+        embeds_fancy = compel(prompts, negative_prompt=neg_prompts)
+        pos_embeds, pos_pooled = embeds_fancy.embeds, embeds_fancy.pooled_embeds
+        neg_embeds, neg_pooled = embeds_fancy.negative_embeds, embeds_fancy.negative_pooled_embeds
+
         return {
             "prompt_embeds": pos_embeds,
             "negative_prompt_embeds": neg_embeds,
@@ -92,38 +118,74 @@ def build_prompt_embeds(
 
 def _encode_batch_sd1(compel_proc, texts: list[str]) -> torch.Tensor:
     """
-    Encode *texts* individually (to handle distinct prompt lengths), then pad
-    all embeddings to the same sequence length and concatenate into a single
-    batch tensor of shape (N, seq_len, hidden_size).
+    Encode *texts* individually then pad all to the same sequence length.
+    Returns a single batched tensor of shape (N, seq_len, hidden_size).
     """
     embeddings = [compel_proc(t) for t in texts]
     if len(embeddings) == 1:
         return embeddings[0]
-    return compel_proc.pad_conditioning_tensors_to_same_length(embeddings)
+    # pad_conditioning_tensors_to_same_length returns List[Tensor]; must cat.
+    padded = compel_proc.pad_conditioning_tensors_to_same_length(embeddings)
+    return torch.cat(padded, dim=0)
 
 
 def _encode_batch_sdxl(
-    compel_proc, texts: list[str]
+    compel_1: object,
+    compel_2: object,
+    texts: list[str],
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Encode *texts* for SDXL individually, pad the sequence-dimension embeddings,
-    and stack the pooled embeddings into a single batch tensor.
+    Encode *texts* for SDXL using two separate Compel instances.
+
+    Each text is encoded by both encoders independently.  The resulting
+    left (768-d) and right (1280-d) tensors are:
+      1. Each padded within their own encoder to the same seq length.
+      2. Cross-aligned to each other (the two tokenizers may produce
+         different sequence lengths for the same text even at the same
+         chunk count).
+      3. Concatenated on the hidden dimension → [B, S, 2048].
 
     Returns:
-        (padded_embeds, pooled)  — shapes (N, seq_len, hidden) and (N, pooled_dim)
+        (prompt_embeds [B, S, 2048],  pooled_prompt_embeds [B, 1280])
     """
-    embeds_list: list[torch.Tensor] = []
+    left_list:   list[torch.Tensor] = []
+    right_list:  list[torch.Tensor] = []
     pooled_list: list[torch.Tensor] = []
 
     for t in texts:
-        embeds, pooled = compel_proc(t)
-        embeds_list.append(embeds)
+        left = compel_1(t)            # [1, S_a, 768]
+        right, pooled = compel_2(t)   # [1, S_b, 1280],  [1, 1280]
+        left_list.append(left)
+        right_list.append(right)
         pooled_list.append(pooled)
 
-    if len(embeds_list) == 1:
-        return embeds_list[0], pooled_list[0]
+    # 1. Pad within each encoder's batch to a common seq length.
+    #    pad_conditioning_tensors_to_same_length returns List[Tensor]; must cat.
+    if len(left_list) == 1:
+        left_padded  = left_list[0]
+        right_padded = right_list[0]
+        pooled       = pooled_list[0]
+    else:
+        left_padded  = torch.cat(compel_1.pad_conditioning_tensors_to_same_length(left_list),  dim=0)
+        right_padded = torch.cat(compel_2.pad_conditioning_tensors_to_same_length(right_list), dim=0)
+        pooled       = torch.cat(pooled_list, dim=0)
 
-    padded_embeds = compel_proc.pad_conditioning_tensors_to_same_length(embeds_list)
-    pooled = torch.cat(pooled_list, dim=0)
-    return padded_embeds, pooled
+    # 2. Align the two sides to the same sequence length.
+    #    (The two tokenizers can produce different lengths for the same text.)
+    s_l, s_r = left_padded.shape[1], right_padded.shape[1]
+    if s_l < s_r:
+        pad = torch.zeros(
+            left_padded.shape[0], s_r - s_l, left_padded.shape[2],
+            dtype=left_padded.dtype, device=left_padded.device,
+        )
+        left_padded = torch.cat([left_padded, pad], dim=1)
+    elif s_r < s_l:
+        pad = torch.zeros(
+            right_padded.shape[0], s_l - s_r, right_padded.shape[2],
+            dtype=right_padded.dtype, device=right_padded.device,
+        )
+        right_padded = torch.cat([right_padded, pad], dim=1)
 
+    # 3. Concatenate on the hidden dimension → [B, S, 768+1280] = [B, S, 2048].
+    embeds = torch.cat([left_padded, right_padded], dim=-1)
+    return embeds, pooled

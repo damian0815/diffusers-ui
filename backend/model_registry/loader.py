@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import logging
 
-import torch
-
 from backend.config import settings
 from backend.domain import ModelEntry
 
@@ -35,7 +33,7 @@ class PipelineLoader:
             logging.info(f"Loading model {entry.name} from {entry.source} onto {settings.device} @{settings.dtype}")
             self._pipeline = DiffusionPipeline.from_pretrained(
                 entry.source, **kwargs
-            ).to(device=settings.device, dtype=settings.dtype)
+            ).to(device=settings.device)
             _enable_fast_attention(self._pipeline)
             self._loaded_key = entry.key
         except Exception as exc:

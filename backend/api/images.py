@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from backend.config import settings
@@ -49,6 +51,25 @@ async def get_image_metadata(image_name: str, session=Depends(get_session)):
     return _image_record_to_dict(record)
 
 
+@router.delete("/i/{image_name}")
+async def delete_image(image_name: str, request: Request, session=Depends(get_session)):
+    """Delete an image record and its files from disk."""
+    service = GalleryService(session)
+    try:
+        board_id = await service.delete_image(image_name)
+    except ImageNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    for path in [settings.images_dir / image_name, settings.thumbnails_dir / image_name]:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    await request.app.state.broadcaster.broadcast_event(
+        "image_deleted", {"image_name": image_name, "board_id": board_id}
+    )
+    return {"deleted": image_name}
+
+
 @router.patch("/i/{image_name}/star")
 async def set_star(image_name: str, starred: bool, session=Depends(get_session)):
     """Toggle the starred flag on an image."""
@@ -91,16 +112,28 @@ async def list_images(
     limit: int = 50,
     session=Depends(get_session),
 ):
-    """Return a paginated list of image records from a gallery."""
+    """Return a paginated list of image records plus the total matching count."""
     service = GalleryService(session)
-    records = await service.list_images(
-        board_id=board_id,
-        search=search,
-        starred_only=starred_only,
-        offset=offset,
-        limit=limit,
+    records, total = await asyncio.gather(
+        service.list_images(
+            board_id=board_id,
+            search=search,
+            starred_only=starred_only,
+            offset=offset,
+            limit=limit,
+        ),
+        service.count_images(
+            board_id=board_id,
+            search=search,
+            starred_only=starred_only,
+        ),
     )
-    return [_image_record_to_dict(r) for r in records]
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": [_image_record_to_dict(r) for r in records],
+    }
 
 
 def _image_record_to_dict(record) -> dict:
@@ -118,6 +151,7 @@ def _image_record_to_dict(record) -> dict:
         "model_key": record.model_key,
         "model_name": record.model_name,
         "starred": record.starred,
+        "gen_seq": record.gen_seq,
         "created_at": record.created_at.isoformat() if record.created_at else None,
         "tags": [t.name for t in record.tags],
     }

@@ -21,6 +21,7 @@ class ImageGenerationParams:
     cfg_rescale_multiplier: float
     sampler: Sampler
     model_key: str               # key into models.json
+    board_id: str | None = None  # target gallery board (None = use worker default)
 
 
 @dataclass(frozen=True)

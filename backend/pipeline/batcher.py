@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Callable, Union
+
 from backend.domain import ImageGenerationParams, QueueItem, CriticalParams
 
 
@@ -19,7 +23,7 @@ def get_critical_params(params: ImageGenerationParams) -> CriticalParams:
 
 def group_into_batches(
     items: list[QueueItem],
-    max_size: int = 0,
+    max_size: Union[int, Callable[[CriticalParams], int]] = 0,
 ) -> list[list[QueueItem]]:
     """
     Group items by critical params, preserving queue order within each group.
@@ -27,9 +31,12 @@ def group_into_batches(
 
     Args:
         items:    flat list of pending QueueItems from the queue.
-        max_size: if > 0, split any group that exceeds this size into chunks of
-                  at most *max_size* items.  Used to reduce VRAM pressure after
-                  an OOM failure.
+        max_size: if an int > 0, split any group that exceeds this size into
+                  chunks of at most *max_size* items.
+                  If callable, it is called with the group's CriticalParams and
+                  should return the maximum batch size for that group (0 =
+                  unlimited).  This allows per-resolution limits derived from
+                  empirical memory measurements.
 
     Example:
         [A(512x512), B(768x768), C(512x512)] →
@@ -41,10 +48,11 @@ def group_into_batches(
         seen.setdefault(key, []).append(item)
 
     result: list[list[QueueItem]] = []
-    for group in seen.values():
-        if max_size > 0 and len(group) > max_size:
-            for i in range(0, len(group), max_size):
-                result.append(group[i : i + max_size])
+    for key, group in seen.items():
+        limit: int = max_size(key) if callable(max_size) else max_size
+        if limit > 0 and len(group) > limit:
+            for i in range(0, len(group), limit):
+                result.append(group[i : i + limit])
         else:
             result.append(group)
     return result
