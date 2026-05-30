@@ -28,6 +28,12 @@
         <span class="nav-badge" x-show="queueItems.length > 0"
               x-text="queueItems.length"></span>
       </button>
+      <button class="nav-tab" :class="{active: activeTab==='errors'}"
+              @click="activeTab='errors'" title="Errors · 3">
+        Errors
+        <span class="nav-badge error-badge" x-show="errorLog.length > 0"
+              x-text="errorLog.length"></span>
+      </button>
       <button class="nav-tab" :class="{active: activeTab==='models'}"
               @click="activeTab='models'" title="Models · 5">
         Models
@@ -37,9 +43,12 @@
     </div>
 
     <!-- Inline error toast -->
-    <div class="nav-error" x-show="errorMessage" x-transition>
-      <span x-text="errorMessage"></span>
-      <button @click="errorMessage = null">&times;</button>
+    <div class="nav-error" x-show="errorMessage" x-transition
+         :class="{'expanded': _errorExpanded}">
+      <span x-text="errorMessage"
+            @click="_errorExpanded = !_errorExpanded"
+            :title="_errorExpanded ? 'Click to collapse' : 'Click to expand full message'"></span>
+      <button @click="_dismissError()" title="Dismiss">&times;</button>
     </div>
   </nav>
 
@@ -169,7 +178,7 @@
                 <option value="dpmpp_sde">DPM++ SDE</option>
                 <option value="euler">Euler</option>
                 <option value="euler_a">Euler A</option>
-                <option value="euler_fm_dynshift">Euler FM DynShift</option>
+                <option value="euler_flowmatch_dynshift">Euler FM DynShift</option>
                 <option value="ddim">DDIM</option>
                 <option value="lms">LMS</option>
                 <option value="dpmpp_3m">DPM++ 3M</option>
@@ -203,6 +212,13 @@
       </div>
 
       <div id="image-display">
+        <div id="progress-bar" x-show="isGenerating" x-transition:leave.duration.400ms>
+          <div id="progress-fill"
+               :class="{'indeterminate': previewProgress === 0}"
+               :style="previewProgress > 0 ? `width: ${previewProgress * 100}%` : ''">
+          </div>
+        </div>
+
         <button id="preview-toggle"
                 @click="togglePreview()"
                 :class="{off: !showPreview}"
@@ -309,14 +325,8 @@
             <p>Generate an image or select one from the gallery.</p>
             <p class="placeholder-hint">⌘↩ to generate</p>
           </div>
-        </div>
+        </div><!-- /no-image-placeholder -->
 
-        <div id="progress-bar" x-show="isGenerating" x-transition:leave.duration.400ms>
-          <div id="progress-fill"
-               :class="{'indeterminate': previewProgress === 0}"
-               :style="previewProgress > 0 ? `width: ${previewProgress * 100}%` : ''">
-          </div>
-        </div>
       </div>
 
     </main>
@@ -363,13 +373,24 @@
           </div>
         </div>
 
+        <!-- Selection action bar — appears when ≥2 images are selected -->
+        <div class="selection-bar" x-show="selectedImageNames.length > 1" x-transition>
+          <span x-text="`${selectedImageNames.length} selected`"></span>
+          <button class="btn-secondary sm" @click="openMoveModal()">Move to…</button>
+          <button class="btn-secondary sm danger" @click="deleteSelected()">Delete</button>
+          <button class="icon-btn sm" title="Clear selection"
+                  @click="selectedImageNames = []; _lastClickIdx = null">✕</button>
+        </div>
+
         <div id="gallery-contents">
           <div id="thumbnail-grid"
+               :class="{'gallery-multisel': selectedImageNames.length > 1}"
                :style="`grid-template-columns: repeat(${thumbsPerRow}, 1fr)`">
             <template x-for="(img, idx) in images" :key="img.image_name">
               <div class="thumb-wrapper"
-                   :class="{selected: selectedImageName === img.image_name, 'is-dragging': _dragSrcIdx === idx}"
-                   @click="selectImage(img.image_name)"
+                   :class="{selected: selectedImageNames.includes(img.image_name), 'is-dragging': _dragSrcIdx === idx}"
+                   @click="handleThumbClick($event, img.image_name, idx)"
+                   @contextmenu.prevent="openContextMenu($event, img.image_name, idx)"
                    draggable="true"
                    @dragstart="onDragStart(idx, $event)"
                    @dragover.prevent="onDragOver(idx, $event)"
@@ -395,6 +416,56 @@
           <p x-show="!hasMore && images.length === 0" class="hint">No images yet.</p>
         </div>
       </div>
+
+      <!-- ── Context menu (right-click) ── -->
+      <div class="ctx-menu"
+           x-show="ctxMenu.open"
+           :style="`left:${ctxMenu.x}px;top:${ctxMenu.y}px`"
+           @click.stop>
+        <div class="ctx-header"
+             x-show="selectedImageNames.length > 1"
+             x-text="`${selectedImageNames.length} images selected`"></div>
+        <button class="ctx-item" @click="openMoveModal()">Move to gallery…</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item danger" @click="deleteSelected()">
+          Delete<template x-if="selectedImageNames.length > 1"><span x-text="` ${selectedImageNames.length} images`"></span></template>
+        </button>
+      </div>
+
+      <!-- ── Move modal ── -->
+      <div class="modal-backdrop"
+           x-show="moveModal.open"
+           x-transition
+           @click.self="closeMoveModal()">
+        <div class="modal-box">
+          <div class="modal-header">
+            <span class="modal-title"
+                  x-text="`Move ${selectedImageNames.length} image${selectedImageNames.length !== 1 ? 's' : ''} to…`"></span>
+            <button class="info-close-btn" @click="closeMoveModal()">×</button>
+          </div>
+          <div class="modal-body">
+            <template x-for="g in galleries.filter(g => g.board_id !== selectedBoardId)" :key="g.board_id">
+              <label class="modal-radio-row">
+                <input type="radio" x-model="moveModal.targetBoardId" :value="g.board_id">
+                <span x-text="g.board_name"></span>
+              </label>
+            </template>
+            <p x-show="galleries.filter(g => g.board_id !== selectedBoardId).length === 0"
+               class="hint" style="padding:8px 0">
+              No other galleries. Create one first (+).
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-secondary" @click="closeMoveModal()">Cancel</button>
+            <button class="btn-primary"
+                    :disabled="!moveModal.targetBoardId || _moving"
+                    @click="confirmMove()">
+              <span x-text="_moving ? 'Moving…' : 'Move'"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+
     </aside>
 
   </div><!-- /#layout -->
@@ -480,6 +551,42 @@
     </div>
 
   </div><!-- /#queue-view -->
+
+
+  <!-- ═══ VIEW: ERRORS ════════════════════════════════════ -->
+  <div id="errors-view" x-show="activeTab === 'errors'">
+
+    <div class="fs-header">
+      <div class="fs-header-left">
+        <h1 class="fs-title">Error Log</h1>
+        <span class="fs-subtitle"
+              x-text="errorLog.length ? `${errorLog.length} error${errorLog.length > 1 ? 's' : ''} recorded` : 'No errors'"></span>
+      </div>
+      <div class="fs-header-actions">
+        <button class="btn-secondary danger" @click="errorLog = []"
+                x-show="errorLog.length > 0">Clear all</button>
+      </div>
+    </div>
+
+    <div class="fs-body">
+      <div x-show="errorLog.length === 0" class="fs-empty">
+        <div class="placeholder-inner">
+          <div class="placeholder-icon">✓</div>
+          <p>No errors recorded.</p>
+        </div>
+      </div>
+
+      <div class="error-log-list" x-show="errorLog.length > 0">
+        <template x-for="(entry, idx) in errorLog" :key="idx">
+          <div class="error-log-row">
+            <span class="error-log-time" x-text="entry.timeStr"></span>
+            <span class="error-log-msg"  x-text="entry.message"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+  </div><!-- /#errors-view -->
 
 
   <!-- ═══ VIEW: MODELS ════════════════════════════════════ -->

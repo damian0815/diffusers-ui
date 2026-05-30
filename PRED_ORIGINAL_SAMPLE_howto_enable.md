@@ -34,16 +34,16 @@ The flag is safe to enable regardless of the active sampler.  The step
 callback falls back to the noisy latent automatically when
 `pred_original_sample` is not available.
 
-| Scheduler | `pred_original_sample` available? |
-|---|---|
-| `EulerDiscreteScheduler` | ✅ yes |
-| `EulerAncestralDiscreteScheduler` | ✅ yes |
-| `DPMSolverMultistepScheduler` | ✅ yes (from step 2+) |
-| `DPMSolverSDEScheduler` | ✅ yes |
-| `KDPM2AncestralDiscreteScheduler` | ✅ yes |
-| `DDIMScheduler` | ✅ yes |
-| `LMSDiscreteScheduler` | ❌ no — falls back to noisy latent |
-| `SDPipelineInferenceFlowMatchEulerDiscreteScheduler` (euler_fm_dynshift) | ✅ yes — computed in our `step()` override |
+| Scheduler                                                                       | `pred_original_sample` available? |
+|---------------------------------------------------------------------------------|---|
+| `EulerDiscreteScheduler`                                                        | ✅ yes |
+| `EulerAncestralDiscreteScheduler`                                               | ✅ yes |
+| `DPMSolverMultistepScheduler`                                                   | ✅ yes (from step 2+) |
+| `DPMSolverSDEScheduler`                                                         | ✅ yes |
+| `KDPM2AncestralDiscreteScheduler`                                               | ✅ yes |
+| `DDIMScheduler`                                                                 | ✅ yes |
+| `LMSDiscreteScheduler`                                                          | ❌ no — falls back to noisy latent |
+| `SDPipelineInferenceFlowMatchEulerDiscreteScheduler` (euler_flowmatch_dynshift) | ✅ yes — computed in our `step()` override |
 
 ---
 
@@ -80,7 +80,7 @@ without invoking the VAE.
 
 ## Mathematical background
 
-### Flow-matching (euler_fm_dynshift)
+### Flow-matching (euler_flowmatch_dynshift)
 
 `SDPipelineInferenceFlowMatchEulerDiscreteScheduler` overrides `step()` to
 expose `pred_original_sample`.  In rectified flow the forward process is a

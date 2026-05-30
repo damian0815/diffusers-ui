@@ -527,7 +527,7 @@ select option { background: var(--surface); }
 
 /* ── Progress bar ───────────────────────────────────────── */
 #progress-bar {
-  position: absolute; bottom: 0; left: 0; right: 0;
+  position: absolute; top: 0; left: 0; right: 0; z-index: 15;
   height: 3px; background: rgba(255,255,255,0.05);
   overflow: hidden;
 }
@@ -797,14 +797,27 @@ select option { background: var(--surface); }
   font-size: 12px;
   max-width: 480px;
   overflow: hidden;
+  transition: max-height 0.2s ease;
 }
-.nav-error span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* collapsed (default): single line, truncated */
+.nav-error span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: zoom-in; flex: 1; min-width: 0;
+}
+/* expanded: wrap to show full message */
+.nav-error.expanded { flex-wrap: wrap; max-width: 600px; align-items: flex-start; }
+.nav-error.expanded span {
+  white-space: pre-wrap; overflow: visible; text-overflow: clip;
+  word-break: break-word; cursor: zoom-out;
+}
 .nav-error button {
   background: none; border: none; color: inherit;
   font-size: 16px; cursor: pointer; opacity: 0.7;
   flex-shrink: 0; line-height: 1;
 }
 .nav-error button:hover { opacity: 1; }
+
+.nav-badge.error-badge { background: var(--danger); color: #fff; }
 
 /* ── Panel header (replaces old tab-bar in controls panel) ── */
 .panel-header {
@@ -839,8 +852,9 @@ select option { background: var(--surface); }
 .panel-scroll::-webkit-scrollbar-track { background: transparent; }
 .panel-scroll::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
 
-/* ── Full-screen views (queue, models) ──────────────────── */
+/* ── Full-screen views (queue, errors, models) ──────────────────── */
 #queue-view,
+#errors-view,
 #models-view {
   height: calc(100vh - var(--nav-h));
   display: flex;
@@ -1195,5 +1209,40 @@ select option { background: var(--surface); }
   letter-spacing: 0.08em;
   color: var(--text-3);
   margin-bottom: 4px;
+}
+
+/* ── Error log (Errors tab) ─────────────────────────────── */
+.error-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 860px;
+}
+
+.error-log-row {
+  display: flex;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--r);
+  align-items: flex-start;
+}
+
+.error-log-time {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: monospace;
+  flex-shrink: 0;
+  padding-top: 1px;
+  white-space: nowrap;
+}
+
+.error-log-msg {
+  font-size: 12px;
+  color: #fca5a5;
+  word-break: break-word;
+  line-height: 1.5;
 }
 

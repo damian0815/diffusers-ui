@@ -189,6 +189,23 @@ class GalleryService:
         )
         return list(result.scalars().all())
 
+    async def move_images(self, image_names: list[str], target_board_id: str) -> int:
+        """Move images to a different gallery. Returns count of moved images."""
+        target = await self.get_gallery(target_board_id)
+        if target is None:
+            raise GalleryNotFoundError(f"Gallery {target_board_id!r} not found")
+        count = 0
+        for name in image_names:
+            result = await self._session.execute(
+                select(ImageRecord).where(ImageRecord.image_name == name)
+            )
+            record = result.scalar_one_or_none()
+            if record is not None:
+                record.gallery_id = target.id  # type: ignore[assignment]
+                count += 1
+        await self._session.flush()
+        return count
+
     async def delete_image(self, image_name: str) -> str | None:
         """Delete an image record from the database. Returns the board_id it belonged to."""
         record = await self.get_image(image_name)

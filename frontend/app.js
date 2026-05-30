@@ -22,14 +22,19 @@ function app() {
     displaySrc: null,
     imageLoading: false,
     previewProgress: 0,
-    isGenerating: false,     // true while at least one job is being polled
-    isEnqueuing: false,      // true during the enqueue network request
-    _activePolls: 0,         // count of in-flight _pollItem loops
-    _isPreviewFrame: false,  // displaySrc is currently a live preview frame
+    isGenerating: false,       // true while at least one job is in-flight
+    isEnqueuing: false,        // true during the enqueue network request
+    _previewDataUrl: null,     // latest live-preview data URL (null = no current frame)
+    _currentDisplayName: null, // image_name currently shown (null when showing preview/nothing)
+    _galleryFirstImage: null,  // first image_name in the current gallery (null = empty gallery)
+    _currentBoardId: null,     // board_id of the currently-selected gallery (set by board-changed event)
     queueItems: [],
     queueDetails: [],
     _queueTimer: null,
     errorMessage: null,
+    _errorExpanded: false,     // true when the nav-error toast is expanded to show the full message
+    _errorTimer: null,         // setTimeout handle for auto-hiding the toast
+    errorLog: [],              // history of all errors: [{message, timeStr}]
     localScanPath: '',
     candidates: [],
     scanDone: false,
@@ -99,15 +104,22 @@ function app() {
         document.title = items.length > 0 ? `(${items.length}) diffusers-ui` : 'diffusers-ui';
       });
 
-      connectPreview(({ image_b64, step, total_steps }) => {
-        if (this.showPreview) {
-          this.displaySrc = `data:image/jpeg;base64,${image_b64}`;
-          this._isPreviewFrame = true;
+      connectPreview(({ item_id, image_b64, step, total_steps }) => {
+        // If we haven't started tracking this item yet (e.g. the tab opened after
+        // the job was enqueued, or the WS enqueue event was missed), start tracking now.
+        if (item_id !== undefined && !this.queueItems.includes(item_id)) {
+          this.queueItems = [...this.queueItems, item_id];
+          this.isGenerating = true;
+          this._pollItem(item_id); // safety-net timeout only
         }
-        // Only update progress while actively generating; ignore stale frames
-        // that arrive after job completion.
         if (this.isGenerating) {
           this.previewProgress = total_steps > 0 ? step / total_steps : 0;
+        }
+        // Update live-preview display directly (bypass _refreshDisplay for performance)
+        if (this.showPreview) {
+          this._previewDataUrl = `data:image/jpeg;base64,${image_b64}`;
+          this.displaySrc = this._previewDataUrl;
+          this._currentDisplayName = null; // we are NOT showing a gallery image right now
         }
       });
 
@@ -117,6 +129,39 @@ function app() {
           this.selectedImageMeta = { ...this.selectedImageMeta, starred: e.detail.starred };
         }
       });
+
+      // Track items enqueued by other clients (other tabs, scripts, etc.)
+      // and handle job-completion / failure events pushed from the server.
+      window.addEventListener('ws-gallery-event', (e) => {
+        const { event, data } = e.detail;
+        if (event === 'queue_item_enqueued') {
+          const id = data.item_id;
+          if (!this.queueItems.includes(id)) {
+            this.queueItems = [...this.queueItems, id];
+            this.isGenerating = true;
+            this._pollItem(id); // safety-net timeout only
+          }
+        } else if (event === 'queue_item_completed') {
+          this._onItemCompleted(data.item_id, data.image_name);
+        } else if (event === 'queue_item_failed') {
+          this._onItemFailed(data.item_id, data.error);
+        } else if (event === 'queue_item_cancelled') {
+          this._onItemFinished(data.item_id);
+        }
+      });
+
+      // Keep _currentBoardId in sync with whatever gallery has selected.
+      window.addEventListener('board-changed', (e) => {
+        this._currentBoardId = e.detail.boardId;
+      });
+
+      // React to gallery reporting its first visible image.
+      // The gallery fires this whenever its images array changes (board switch,
+      // search, load, add, delete), so we always know what rule 3 should display.
+      window.addEventListener('gallery-first-image-changed', (e) => {
+        this._galleryFirstImage = e.detail.imageName;
+        this._refreshDisplay();
+      });
     },
 
     // ----------------------------------------------------------------
@@ -124,7 +169,8 @@ function app() {
     // ----------------------------------------------------------------
 
     async generate(prepend = false) {
-      if (!this.modelKey) { this.errorMessage = 'Please select a model first.'; return; }
+      if (!this.modelKey) { this._setError('Please select a model first.'); return; }
+      if (!this._currentBoardId) { this._setError('No gallery selected — please wait for the gallery to load or create one on the right panel.'); return; }
       if (this.isEnqueuing) return;
 
       this.isEnqueuing = true;
@@ -142,17 +188,16 @@ function app() {
         });
         if (!resp.ok) throw new Error(await resp.text());
         const data = await resp.json();
-
         // Replace the optimistic placeholder with the real item IDs.
         const realIds = data.items.map(i => i.item_id);
         this.queueItems = [
           ...this.queueItems.filter(id => id !== tempId),
           ...realIds,
         ];
-        for (const id of realIds) this._pollItem(id);
+        this.isGenerating = true;
       } catch (err) {
         this.queueItems = this.queueItems.filter(id => id !== tempId);
-        this.errorMessage = `Generation failed: ${err.message}`;
+        this._setError(`Generation failed: ${err.message}`);
       } finally {
         this.isEnqueuing = false;
       }
@@ -167,42 +212,73 @@ function app() {
           steps: this.steps, cfg: this.cfg,
           cfg_rescale_multiplier: this.cfgRescale,
           sampler: this.sampler, model_key: this.modelKey,
+          board_id: this._currentBoardId,
         },
       };
     },
 
     async _pollItem(itemId) {
-      this._activePolls++;
-      this.isGenerating = true;
-
-      const POLL_MS = 1000;
-      while (true) {
-        await new Promise(r => setTimeout(r, POLL_MS));
-        try {
-          const resp = await fetch(`/api/v1/queue/default/i/${itemId}`);
-          if (!resp.ok) break;
-          const data = await resp.json();
-          if (data.status === 'completed') {
-            this.queueItems = this.queueItems.filter(id => id !== itemId);
-            this.$dispatch('image-completed', { imageName: data.output_image_name });
-            if (this.autoSelectLatest && data.output_image_name) {
-              this.selectImageFromEvent({ detail: { imageName: data.output_image_name } });
-            }
-            break;
-          }
-          if (data.status === 'failed' || data.status === 'cancelled') {
-            this.queueItems = this.queueItems.filter(id => id !== itemId);
-            if (data.status === 'failed') this.errorMessage = `Job failed: ${data.error}`;
-            break;
-          }
-        } catch (e) { break; }
+      // DEPRECATED — completion is now driven by WS events (queue_item_completed /
+      // queue_item_failed / queue_item_cancelled).  This method is kept as a
+      // safety-net fallback: if a WS event is missed for any reason the item
+      // will be cleared after a 5-minute timeout so isGenerating doesn't get stuck.
+      const TIMEOUT_MS = 5 * 60 * 1000;
+      await new Promise(r => setTimeout(r, TIMEOUT_MS));
+      // If still tracked after the timeout, force-clear it.
+      if (this.queueItems.includes(itemId)) {
+        this._onItemFinished(itemId);
       }
+    },
 
-      this._activePolls = Math.max(0, this._activePolls - 1);
-      if (this._activePolls === 0) {
+    // Called via WS event when a job completes successfully.
+    _onItemCompleted(itemId, imageName) {
+      if (this.autoSelectLatest && imageName) {
+        this.selectedImageName = imageName;
+        this._loadImageMeta(imageName);
+      }
+      this._onItemFinished(itemId);
+    },
+
+    // Called via WS event when a job fails.
+    _onItemFailed(itemId, error) {
+      if (error) this._setError(`Job failed: ${error}`);
+      this._onItemFinished(itemId);
+    },
+
+    // Shared cleanup: remove item from tracking and, when nothing is left in
+    // flight, reset generating state and refresh the display.
+    _onItemFinished(itemId) {
+      this.queueItems = this.queueItems.filter(id => id !== itemId);
+      if (this.queueItems.length === 0) {
         this.isGenerating = false;
         this.previewProgress = 0;
+        this._previewDataUrl = null;
+        this._currentDisplayName = null;
+        this._refreshDisplay();
       }
+    },
+
+    // ----------------------------------------------------------------
+    // Error helpers
+    // ----------------------------------------------------------------
+
+    // Set an error message: shows the toast, auto-hides after 10 s, logs it.
+    _setError(msg) {
+      if (!msg) return;
+      const timeStr = new Date().toLocaleTimeString();
+      this.errorMessage = msg;
+      this._errorExpanded = false;
+      this.errorLog.unshift({ message: msg, timeStr });
+      clearTimeout(this._errorTimer);
+      this._errorTimer = setTimeout(() => { this.errorMessage = null; }, 10_000);
+    },
+
+    // Dismiss the toast immediately (e.g. user clicks ×).
+    _dismissError() {
+      clearTimeout(this._errorTimer);
+      this._errorTimer = null;
+      this.errorMessage = null;
+      this._errorExpanded = false;
     },
 
     // ----------------------------------------------------------------
@@ -220,47 +296,62 @@ function app() {
     },
 
     selectImageFromEvent(event) {
-      const { imageName, fromGallery = false } = event.detail;
-
-      // Null imageName → clear the panel (e.g. when a deletion removes the selected image)
-      if (!imageName) {
-        this.selectedImageName = null;
+      const { imageName } = event.detail;
+      this.selectedImageName = imageName || null;
+      if (imageName) {
+        this._loadImageMeta(imageName);
+      } else {
         this.selectedImageMeta = null;
-        if (!this._isPreviewFrame) this.displaySrc = null;
         this.imageLoading = false;
+      }
+      this._refreshDisplay();
+    },
+
+    // ----------------------------------------------------------------
+    // Display priority logic
+    // ----------------------------------------------------------------
+
+    // Implements the canonical display priority:
+    //   1. Generation in progress + showPreview + preview frame available → keep preview
+    //   2. Image selected in gallery → show it
+    //   3. Gallery has images → show first one
+    //   4. Nothing → blank
+    // Call this whenever any of the above inputs change.
+    _refreshDisplay() {
+      // Rule 1 — live preview takes over during generation (handled directly by
+      // connectPreview for performance; we just guard against overriding it here)
+      if (this.isGenerating && this.showPreview && this._previewDataUrl) return;
+
+      // Rules 2 & 3 — show the selected image, or fall back to the first gallery image
+      const imageName = this.selectedImageName || this._galleryFirstImage;
+      if (imageName) {
+        if (this._currentDisplayName !== imageName) {
+          this._loadAndShowImage(imageName);
+        }
         return;
       }
 
-      this.selectedImageName = imageName;
-      this._loadImageMeta(imageName);
+      // Rule 4 — nothing to show
+      this.displaySrc = null;
+      this._currentDisplayName = null;
+    },
+
+    _loadAndShowImage(imageName) {
+      this._currentDisplayName = imageName;
       this.imageLoading = true;
+      // Show thumbnail immediately for responsive feel
+      this.displaySrc = `/api/v1/images/i/${imageName}/thumbnail`;
 
       const fullUrl = `/api/v1/images/i/${imageName}/full`;
-
-      // For gallery clicks (or when there's no current image), show the
-      // thumbnail immediately for responsive feel.
-      // For auto-select on generation completion, keep the live preview frame
-      // visible — it's already the best approximation of the result — and
-      // atomically swap to the full image once it's ready.
-      if (fromGallery || !this.displaySrc) {
-        this.displaySrc = `/api/v1/images/i/${imageName}/thumbnail`;
-        this._isPreviewFrame = false;
-      }
-
       const img = new Image();
       img.onload = () => {
-        if (this.selectedImageName === imageName) {
+        if (this._currentDisplayName === imageName) {
           this.displaySrc = fullUrl;
           this.imageLoading = false;
-          this._isPreviewFrame = false;
         }
       };
       img.onerror = () => {
-        if (!this.displaySrc || this._isPreviewFrame) {
-          this.displaySrc = `/api/v1/images/i/${imageName}/thumbnail`;
-          this._isPreviewFrame = false;
-        }
-        this.imageLoading = false;
+        if (this._currentDisplayName === imageName) this.imageLoading = false;
       };
       img.src = fullUrl;
     },
@@ -278,7 +369,7 @@ function app() {
       try {
         const resp = await fetch(`/api/v1/images/i/${this.selectedImageName}/star?starred=${newStarred}`, { method: 'PATCH' });
         if (resp.ok) this.selectedImageMeta = await resp.json();
-      } catch (e) { this.errorMessage = 'Could not update star.'; }
+      } catch (e) { this._setError('Could not update star.'); }
     },
 
     // ----------------------------------------------------------------
@@ -287,7 +378,7 @@ function app() {
 
     async clearQueue() {
       try { await fetch('/api/v1/queue/default/clear', { method: 'PUT' }); this.queueItems = []; await this.loadQueueDetails(); }
-      catch (e) { this.errorMessage = 'Could not clear queue.'; }
+      catch (e) { this._setError('Could not clear queue.'); }
     },
 
     async loadQueueDetails() {
@@ -303,7 +394,7 @@ function app() {
       try {
         await fetch(`/api/v1/queue/default/i/${itemId}`, { method: 'DELETE' });
         await this.loadQueueDetails();
-      } catch (e) { this.errorMessage = 'Could not cancel item.'; }
+      } catch (e) { this._setError('Could not cancel item.'); }
     },
 
     async moveToFront(itemId) {
@@ -311,7 +402,7 @@ function app() {
         const resp = await fetch(`/api/v1/queue/default/i/${itemId}/move_front`, { method: 'PUT' });
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadQueueDetails();
-      } catch (e) { this.errorMessage = `Could not move item to front: ${e.message}`; }
+      } catch (e) { this._setError(`Could not move item to front: ${e.message}`); }
     },
 
     async resubmitItem(itemId) {
@@ -320,9 +411,10 @@ function app() {
         if (!resp.ok) throw new Error(await resp.text());
         const data = await resp.json();
         this.queueItems.push(data.item_id);
-        this._pollItem(data.item_id);
+        this.isGenerating = true;
+        this._pollItem(data.item_id); // safety-net timeout only
         await this.loadQueueDetails();
-      } catch (e) { this.errorMessage = `Could not resubmit: ${e.message}`; }
+      } catch (e) { this._setError(`Could not resubmit: ${e.message}`); }
     },
 
     async pruneQueue() {
@@ -332,7 +424,7 @@ function app() {
         this.queueItems = this.queueItems.filter(id =>
           this.queueDetails.some(d => d.item_id === id && (d.status === 'pending' || d.status === 'processing'))
         );
-      } catch (e) { this.errorMessage = 'Could not prune queue.'; }
+      } catch (e) { this._setError('Could not prune queue.'); }
     },
 
     viewQueueImage(imageName) {
@@ -362,7 +454,7 @@ function app() {
         const data = await (await fetch('/api/v2/models/scan_hf_cache')).json();
         this.candidates = data.candidates || [];
         this.scanDone = true;
-      } catch (e) { this.errorMessage = `Scan failed: ${e.message}`; }
+      } catch (e) { this._setError(`Scan failed: ${e.message}`); }
     },
 
     async scanLocalDir() {
@@ -371,7 +463,7 @@ function app() {
         const data = await (await fetch(`/api/v2/models/scan_local_dir?path=${encodeURIComponent(this.localScanPath)}`)).json();
         this.candidates = data.candidates || [];
         this.scanDone = true;
-      } catch (e) { this.errorMessage = `Scan failed: ${e.message}`; }
+      } catch (e) { this._setError(`Scan failed: ${e.message}`); }
     },
 
     isInstalled(candidate) {
@@ -386,7 +478,7 @@ function app() {
         });
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
-      } catch (e) { this.errorMessage = `Register failed: ${e.message}`; }
+      } catch (e) { this._setError(`Register failed: ${e.message}`); }
     },
 
     async deleteModel(key) {
@@ -395,7 +487,7 @@ function app() {
         await fetch(`/api/v2/models/${key}`, { method: 'DELETE' });
         await this.loadModels();
         if (this.modelKey === key) this.modelKey = this.models[0]?.key || '';
-      } catch (e) { this.errorMessage = 'Could not delete model.'; }
+      } catch (e) { this._setError('Could not delete model.'); }
     },
 
     startEdit(m) {
@@ -420,7 +512,7 @@ function app() {
         });
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
-      } catch (e) { this.errorMessage = `Rename failed: ${e.message}`; }
+      } catch (e) { this._setError(`Rename failed: ${e.message}`); }
     },
 
     // ----------------------------------------------------------------
@@ -430,13 +522,10 @@ function app() {
     togglePreview() {
       this.showPreview = !this.showPreview;
       if (!this.showPreview) {
-        // Preview turned off: show the selected gallery image or clear the panel.
-        this._isPreviewFrame = false;
-        if (this.selectedImageName) {
-          this.selectImageFromEvent({ detail: { imageName: this.selectedImageName, fromGallery: true } });
-        } else {
-          this.displaySrc = null;
-        }
+        // Preview turned off: drop any live-preview frame and apply priority logic
+        this._previewDataUrl = null;
+        this._currentDisplayName = null;
+        this._refreshDisplay();
       }
     },
 
@@ -502,6 +591,7 @@ function app() {
           switch (e.key.toUpperCase()) {
             case '1': e.preventDefault(); this.activeTab = 'generate'; break;
             case '2': e.preventDefault(); this.activeTab = 'queue';    break;
+            case '3': e.preventDefault(); this.activeTab = 'errors';   break;
             case '5': e.preventDefault(); this.activeTab = 'models';   break;
             case 'G': e.preventDefault(); Layout.toggleRight();        break;
             case 'T': e.preventDefault(); Layout.toggleLeft();         break;

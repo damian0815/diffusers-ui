@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PIL import Image as PILImage
+import diffusers
 
 from backend.config import settings
 from backend.domain import QueueItem, ItemStatus
@@ -39,19 +40,19 @@ logger = logging.getLogger(__name__)
 USE_PRED_ORIGINAL_SAMPLE: bool = True  # ← set to True to enable
 
 # Map domain sampler names → diffusers scheduler class names
-SAMPLER_MAP: dict[str, str] = {
-    "dpmpp_sde_k": "DPMSolverSDEScheduler",
-    "dpmpp_sde": "DPMSolverSDEScheduler",
-    "dpmpp_2m_sde_k": "DPMSolverMultistepScheduler",
-    "dpmpp_2m_sde": "DPMSolverMultistepScheduler",
-    "dpmpp_2m": "DPMSolverMultistepScheduler",
-    "dpmpp_3m": "DPMSolverMultistepScheduler",
-    "euler": "EulerDiscreteScheduler",
-    "euler_a": "EulerAncestralDiscreteScheduler",
-    "euler_fm_dynshift": "SDPipelineInferenceFlowMatchEulerDiscreteScheduler",
-    "ddim": "DDIMScheduler",
-    "lms": "LMSDiscreteScheduler",
-    "kdpm_2_a": "KDPM2AncestralDiscreteScheduler",
+SAMPLER_MAP: dict[str, tuple[str, dict]] = {
+    "dpmpp_sde_k": ("DPMSolverSDEScheduler", {}),
+    "dpmpp_sde": ("DPMSolverSDEScheduler", {}),
+    "dpmpp_2m_sde_k": ("DPMSolverMultistepScheduler", {}),
+    "dpmpp_2m_sde": ("DPMSolverMultistepScheduler", {}),
+    "dpmpp_2m": ("DPMSolverMultistepScheduler", {}),
+    "dpmpp_3m": ("DPMSolverMultistepScheduler", {}),
+    "euler": ("EulerDiscreteScheduler", {}),
+    "euler_a": ("EulerAncestralDiscreteScheduler", {}),
+    "euler_flowmatch_dynshift": ("SDPipelineInferenceFlowMatchEulerDiscreteScheduler", dict(shift=1, use_dynamic_shifting=True, time_shift_type='linear')),
+    "ddim": ("DDIMScheduler", {}),
+    "lms": ("LMSDiscreteScheduler", {}),
+    "kdpm_2_a": ("KDPM2AncestralDiscreteScheduler", {}),
 }
 
 # Samplers that use Karras sigma sigmas
@@ -137,9 +138,13 @@ class PipelineWorker:
         """Run a single batch: load model, generate, save, record."""
         entry = self._registry.get(batch[0].params.model_key)
         if entry is None:
-            error_msg = f"Model key {batch[0].params.model_key!r} not found in registry"
+            error_msg = f"Model key {batch[0].params.model_key!r} not found in registry (have: {[e.key for e in self._registry.all()]})"
             for item in batch:
                 await self._queue.mark_failed(item, error_msg)
+                await self._broadcaster.broadcast_event(
+                    "queue_item_failed",
+                    {"item_id": item.item_id, "error": error_msg},
+                )
             logger.error(error_msg)
             return
 
@@ -148,6 +153,10 @@ class PipelineWorker:
         except Exception as exc:
             for item in batch:
                 await self._queue.mark_failed(item, str(exc))
+                await self._broadcaster.broadcast_event(
+                    "queue_item_failed",
+                    {"item_id": item.item_id, "error": str(exc)},
+                )
             logger.error("Pipeline load failed: %s", exc)
             return
 
@@ -268,6 +277,10 @@ class PipelineWorker:
             for item, pil_image in zip(batch, result.images):
                 image_name = await asyncio.to_thread(_save_image, pil_image)
                 await self._queue.mark_completed(item, image_name)
+                await self._broadcaster.broadcast_event(
+                    "queue_item_completed",
+                    {"item_id": item.item_id, "image_name": image_name},
+                )
                 await self._record_in_gallery(item, image_name, entry.name)
 
         except Exception as exc:
@@ -278,6 +291,10 @@ class PipelineWorker:
                 for item in batch:
                     if item.status == ItemStatus.PROCESSING:
                         await self._queue.mark_failed(item, str(exc))
+                        await self._broadcaster.broadcast_event(
+                            "queue_item_failed",
+                            {"item_id": item.item_id, "error": str(exc)},
+                        )
 
     async def _handle_oom(self, batch: list[QueueItem], exc: Exception) -> None:
         """
@@ -313,29 +330,35 @@ class PipelineWorker:
                 batch[0],
                 "Out of memory — try reducing image size or number of steps.",
             )
+            await self._broadcaster.broadcast_event(
+                "queue_item_failed",
+                {
+                    "item_id": batch[0].item_id,
+                    "error": "Out of memory — try reducing image size or number of steps.",
+                },
+            )
 
     def _apply_scheduler(self, pipeline, sampler: str) -> None:
         """Swap the pipeline scheduler in-place based on the sampler name."""
-        scheduler_class_name = SAMPLER_MAP.get(sampler)
-        if scheduler_class_name is None:
-            return
+        scheduler_class_name_and_kwargs = SAMPLER_MAP.get(sampler)
+        if scheduler_class_name_and_kwargs is None:
+            raise ValueError(f"Unknown sampler '{sampler}'")
         try:
             config = dict(pipeline.scheduler.config)
-            if sampler == 'euler_fm_dynshift':
-                pipeline.scheduler = SDPipelineInferenceFlowMatchEulerDiscreteScheduler.from_config(
-                    config, shift=1, use_dynamic_shifting=True, time_shift_type='linear'
-                )
+            scheduler_class_name, scheduler_kwargs = scheduler_class_name_and_kwargs
+            if scheduler_class_name == "SDPipelineInferenceFlowMatchEulerDiscreteScheduler":
+                scheduler_cls = SDPipelineInferenceFlowMatchEulerDiscreteScheduler
             else:
-                import diffusers
                 scheduler_cls = getattr(diffusers, scheduler_class_name, None)
                 if scheduler_cls is None:
-                    return
-                use_karras = sampler in KARRAS_SAMPLERS
-                if use_karras:
-                    config["use_karras_sigmas"] = True
-                pipeline.scheduler = scheduler_cls.from_config(config)
-        except Exception:
-            logger.warning("Could not swap scheduler for sampler %r", sampler)
+                    raise ValueError(f"No scheduler in diffusers for class name '{scheduler_class_name}'")
+            use_karras = sampler in KARRAS_SAMPLERS
+            if use_karras:
+                config["use_karras_sigmas"] = True
+            config.update(**scheduler_kwargs)
+            pipeline.scheduler = scheduler_cls.from_config(config, **scheduler_kwargs)
+        except Exception as e:
+            logger.warning(f"Could not swap scheduler for sampler {sampler}: {repr(e)}")
 
     async def _record_in_gallery(
         self, item: QueueItem, image_name: str, model_name: str

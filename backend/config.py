@@ -28,6 +28,9 @@ class Settings:
     thumbnail_size: tuple[int, int] = (256, 256)
     batch_window_s: float = 0.3   # how long to wait collecting items before batching
     preview_every_n_steps: int = 1
+    # Preview method: "taesd" (higher quality, uses tiny neural decoder) or
+    # "approx" (linear RGB projection — fast, no extra weights required).
+    preview_method: str = "taesd"
     device: str = field(default_factory=_detect_device)
     seed_device: str = 'cpu'
 

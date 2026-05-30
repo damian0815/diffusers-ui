@@ -1,10 +1,26 @@
 import io
+import sys
 import json
 import base64
 import asyncio
+import logging
+import threading
+from pathlib import Path
 
 import torch
 from PIL import Image
+
+from backend.config import settings
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# TAESD submodule path — project-root/taesd/
+# ---------------------------------------------------------------------------
+
+_TAESD_DIR = Path(__file__).parent.parent.parent / "taesd"
+if str(_TAESD_DIR) not in sys.path:
+    sys.path.insert(0, str(_TAESD_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -76,18 +92,10 @@ def _sample_to_lowres_estimated_image(
     return Image.fromarray(latents_ubyte.numpy())
 
 
-def latents_to_preview_image(latents: torch.Tensor, *, is_sdxl: bool = False) -> bytes:
+def _latents_to_approx_image(latents: torch.Tensor, *, is_sdxl: bool = False) -> bytes:
     """
-    Convert a latent tensor to a low-quality preview JPEG without using the VAE.
-    Uses a per-model RGB factor matrix for a coloured, recognisable approximation.
-
-    Args:
-        latents:  shape (1, C, H, W) — single-item latent from a step callback
-        is_sdxl:  use SDXL projection factors + smoothing when True,
-                  otherwise use SD 1.x factors.
-
-    Returns:
-        JPEG bytes suitable for WebSocket transmission.
+    Linear RGB-projection approximation (no neural decoder required).
+    Fast but lower quality — used as fallback when TAESD is unavailable.
     """
     with torch.no_grad():
         if is_sdxl:
@@ -113,6 +121,95 @@ def latents_to_preview_image(latents: torch.Tensor, *, is_sdxl: bool = False) ->
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=60)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# TAESD decoder — lazy-loaded, one instance per (variant, device) pair
+# ---------------------------------------------------------------------------
+
+_taesd_cache: dict = {}       # (variant, device_str) → nn.Sequential
+_taesd_lock = threading.Lock()
+
+
+def _load_taesd_decoder(variant: str, device: str):
+    """
+    Load (or return a cached) TAESD decoder for *variant* on *device*.
+
+    variant: "sd1" → taesd_decoder.pth (4-channel SD 1.x / SDXL-compatible)
+             "sdxl" → taesdxl_decoder.pth
+    """
+    key = (variant, device)
+    if key in _taesd_cache:
+        return _taesd_cache[key]
+
+    with _taesd_lock:
+        if key in _taesd_cache:          # double-checked
+            return _taesd_cache[key]
+
+        weight_name = "taesdxl_decoder.pth" if variant == "sdxl" else "taesd_decoder.pth"
+        weight_path = _TAESD_DIR / weight_name
+
+        try:
+            import taesd as _taesd_module  # noqa: PLC0415 (imported inside fn intentionally)
+            dec = _taesd_module.Decoder().to(device).requires_grad_(False)
+            dec.load_state_dict(
+                torch.load(weight_path, map_location=device, weights_only=True)
+            )
+            dec.eval()
+            _taesd_cache[key] = dec
+            logger.info("Loaded TAESD decoder (%s) from %s", variant, weight_path)
+            return dec
+        except Exception as exc:
+            logger.warning(
+                "Could not load TAESD decoder from %s: %s — falling back to approx preview",
+                weight_path, exc,
+            )
+            return None
+
+
+def _latents_to_taesd_image(latents: torch.Tensor, *, is_sdxl: bool = False) -> bytes | None:
+    """
+    Decode latents with TAESD and return JPEG bytes, or return None if the
+    decoder could not be loaded (caller falls back to approx).
+    """
+    variant = "sdxl" if is_sdxl else "sd1"
+    device = str(latents.device)
+    dec = _load_taesd_decoder(variant, device)
+    if dec is None:
+        return None
+
+    with torch.no_grad():
+        # Decoder outputs roughly [0, 1] RGB; clamp for safety.
+        rgb = dec(latents.float()).clamp(0, 1)   # (1, 3, H, W)
+
+    rgb_np = rgb[0].permute(1, 2, 0).mul(255).byte().cpu().numpy()
+    img = Image.fromarray(rgb_np, mode="RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def latents_to_preview_image(latents: torch.Tensor, *, is_sdxl: bool = False) -> bytes:
+    """
+    Convert a latent tensor to a preview JPEG.
+
+    Dispatches to TAESD (higher quality) or the linear-approximation method
+    depending on ``settings.preview_method``.
+
+    Args:
+        latents:  shape (1, C, H, W) — single-item latent from a step callback
+        is_sdxl:  select SDXL weights / projection factors when True
+
+    Returns:
+        JPEG bytes suitable for WebSocket transmission.
+    """
+    if settings.preview_method == "taesd":
+        result = _latents_to_taesd_image(latents, is_sdxl=is_sdxl)
+        if result is not None:
+            return result
+        # Fall through to approx if TAESD is unavailable
+
+    return _latents_to_approx_image(latents, is_sdxl=is_sdxl)
 
 
 class PreviewBroadcaster:

@@ -4,12 +4,35 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from backend.config import settings
 from backend.gallery.db import get_session
 from backend.gallery.service import GalleryService, GalleryNotFoundError, ImageNotFoundError
 
 router = APIRouter(prefix="/api/v1/images", tags=["images"])
+
+
+class MoveImagesRequest(BaseModel):
+    image_names: list[str]
+    source_board_id: str
+    target_board_id: str
+
+
+@router.post("/move")
+async def move_images(body: MoveImagesRequest, request: Request, session=Depends(get_session)):
+    """Move a set of images to a different gallery."""
+    service = GalleryService(session)
+    try:
+        count = await service.move_images(body.image_names, body.target_board_id)
+    except GalleryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    await request.app.state.broadcaster.broadcast_event("images_moved", {
+        "image_names": body.image_names,
+        "source_board_id": body.source_board_id,
+        "target_board_id": body.target_board_id,
+    })
+    return {"moved": count, "target_board_id": body.target_board_id}
 
 
 @router.get("/names")
@@ -146,8 +169,10 @@ def _image_record_to_dict(record) -> dict:
         "height": record.height,
         "steps": record.steps,
         "cfg": record.cfg,
+        "cfg_scale": record.cfg, # duplicate, for annoying client
         "cfg_rescale_multiplier": record.cfg_rescale_multiplier,
         "sampler": record.sampler,
+        "scheduler": record.sampler, # duplicate, for annoying client
         "model_key": record.model_key,
         "model_name": record.model_name,
         "starred": record.starred,
