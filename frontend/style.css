@@ -211,6 +211,30 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   gap: var(--gap);
   align-items: stretch;
   margin-bottom: 2px;
+  flex-wrap: wrap;
+}
+
+.batch-count-field {
+  display: flex;
+  align-items: center;
+}
+.batch-count-field input {
+  height: 100%;
+}
+
+/* Small "N gens" pill shown when batchCount > 1 or brace variants > 1 */
+.batch-hint-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 20px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-dim);
+  color: var(--accent-hi);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: default;
 }
 
 /* ── Section divider ────────────────────────────────────── */
@@ -1063,6 +1087,49 @@ select option { background: var(--surface); }
 }
 .models-discover-bar input { flex: 1; }
 
+/* ── HuggingFace direct-install card ─────────────────────── */
+.hf-install-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.hf-install-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+}
+
+.hf-install-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.hf-repo-input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.hf-install-meta {
+  flex-wrap: wrap;
+}
+
+.hf-install-footer {
+  align-items: center;
+}
+.hf-install-footer input[type="password"] {
+  min-width: 0;
+}
+
 /* Candidate (discover) rows */
 .model-discover-row {
   display: flex;
@@ -1076,6 +1143,15 @@ select option { background: var(--surface); }
 }
 .model-discover-row:hover { border-color: var(--border-2); }
 .model-discover-row.is-installed { opacity: 0.5; }
+
+/* Actions group (quant select + add button) — never shrinks, so the body
+   keeps all available width and long source paths don't get squished */
+.model-discover-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
 
 .model-discover-body {
   flex: 1;
@@ -1199,6 +1275,35 @@ select option { background: var(--surface); }
   color: var(--text-3);
   font-family: monospace;
   word-break: break-all;
+}
+
+/* Quantization row inside an installed model card */
+.model-row-quant {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Quant select — used in both installed-model rows and candidate rows */
+.quant-select {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  width: auto;          /* size to content; never force a wide minimum */
+  flex-shrink: 0;
+}
+.quant-select:focus { outline: none; border-color: var(--accent); }
+
+.quant-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
 }
 
 /* Keep section-heading for other potential uses */

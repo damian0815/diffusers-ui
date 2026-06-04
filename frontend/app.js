@@ -12,7 +12,9 @@ function app() {
     cfg: 7.5,
     cfgRescale: 0.0,
     sampler: 'dpmpp_2m',
+    predictionType: 'default',
     modelKey: '',
+    batchCount: 1,
 
     // ---- UI state ----
     activeTab: 'generate',
@@ -38,6 +40,15 @@ function app() {
     localScanPath: '',
     candidates: [],
     scanDone: false,
+    // ---- HF direct-install form ----
+    hfInstall: {
+      repoId: '',    // raw input — may be a full URL or bare repo id
+      name: '',
+      base: 'sd-1',
+      apiKey: '',
+      quantization: '',
+      pending: false,
+    },
     modelEditingKey: null,
     modelEditName: '',
     autoSelectLatest: true,
@@ -162,6 +173,42 @@ function app() {
         this._galleryFirstImage = e.detail.imageName;
         this._refreshDisplay();
       });
+
+      // Reconcile any pending/processing items that were in flight before this
+      // page session started (e.g. server restarted, client reconnected).
+      await this._reconcileQueue();
+    },
+
+    // ----------------------------------------------------------------
+    // Queue startup reconciliation
+    // ----------------------------------------------------------------
+
+    // On page load, fetch current queue state and start tracking any items
+    // that are still pending or actively processing.  This ensures the queue
+    // badge, progress indicator, and completion callbacks all work correctly
+    // even when the client connects (or reconnects) after jobs were enqueued.
+    async _reconcileQueue() {
+      try {
+        const resp = await fetch('/api/v1/queue/default/');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const active = (data.items || []).filter(
+          i => i.status === 'pending' || i.status === 'processing'
+        );
+        if (active.length > 0) {
+          const ids = active.map(i => i.item_id);
+          // Merge without duplicating ids already present (e.g. from WS events
+          // that arrived between page-load and this fetch completing).
+          const existingSet = new Set(this.queueItems);
+          const newIds = ids.filter(id => !existingSet.has(id));
+          if (newIds.length > 0) {
+            this.queueItems = [...this.queueItems, ...newIds];
+            this.isGenerating = true;
+            // Safety-net timeout for each — completion is normally driven by WS events.
+            for (const id of newIds) this._pollItem(id);
+          }
+        }
+      } catch (e) {}
     },
 
     // ----------------------------------------------------------------
@@ -175,44 +222,73 @@ function app() {
 
       this.isEnqueuing = true;
 
-      // ── Optimistic update: bump the counter immediately so the badge and
-      //    title react before the server responds.
-      const tempId = `_opt_${Date.now()}`;
-      this.queueItems = [...this.queueItems, tempId];
+      // Expand {a|b|c} brace syntax into a list of prompt variants.
+      const variants = this._expandBraces(this.prompt);
+
+      // Optimistic placeholders — one per variant so the badge reacts immediately.
+      const tempIds = variants.map((_, i) => `_opt_${Date.now()}_${i}`);
+      this.queueItems = [...this.queueItems, ...tempIds];
 
       try {
-        const resp = await fetch('/api/v1/queue/default/enqueue_batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this._buildEnqueueBody(prepend)),
-        });
-        if (!resp.ok) throw new Error(await resp.text());
-        const data = await resp.json();
-        // Replace the optimistic placeholder with the real item IDs.
-        const realIds = data.items.map(i => i.item_id);
+        const allRealIds = [];
+        for (const variant of variants) {
+          const resp = await fetch('/api/v1/queue/default/enqueue_batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this._buildEnqueueBody(prepend, variant)),
+          });
+          if (!resp.ok) throw new Error(await resp.text());
+          const data = await resp.json();
+          allRealIds.push(...data.items.map(i => i.item_id));
+        }
+        // Replace all optimistic placeholders with the real IDs.
         this.queueItems = [
-          ...this.queueItems.filter(id => id !== tempId),
-          ...realIds,
+          ...this.queueItems.filter(id => !tempIds.includes(id)),
+          ...allRealIds,
         ];
         this.isGenerating = true;
       } catch (err) {
-        this.queueItems = this.queueItems.filter(id => id !== tempId);
+        this.queueItems = this.queueItems.filter(id => !tempIds.includes(id));
         this._setError(`Generation failed: ${err.message}`);
       } finally {
         this.isEnqueuing = false;
       }
     },
 
-    _buildEnqueueBody(prepend) {
+    // Expand InvokeAI-style {a|b|c} brace syntax into all prompt variants.
+    // Multiple brace groups create the cartesian product:
+    //   "a {photo|sketch} of a {cat|dog}" → 4 variants.
+    // If the prompt has no brace groups, returns [prompt].
+    _expandBraces(prompt) {
+      const re = /\{([^{}]*\|[^{}]*)\}/;   // matches {x|y…} (at least one pipe, no nested {})
+      const match = re.exec(prompt);
+      if (!match) return [prompt];
+      const alternatives = match[1].split('|');
+      return alternatives.flatMap(alt => {
+        const replaced = prompt.slice(0, match.index) + alt + prompt.slice(match.index + match[0].length);
+        return this._expandBraces(replaced);
+      });
+    },
+
+    // Total number of items that will be enqueued given current prompt + batchCount.
+    _totalGenCount() {
+      return this._expandBraces(this.prompt).length * this.batchCount;
+    },
+
+    _buildEnqueueBody(prepend, promptOverride = null) {
       return {
         prepend,
         batch: {
-          prompt: this.prompt, negative_prompt: this.negativePrompt,
+          prompt: promptOverride ?? this.prompt,
+          negative_prompt: this.negativePrompt,
           seed: this.seed, width: this.width, height: this.height,
           steps: this.steps, cfg: this.cfg,
           cfg_rescale_multiplier: this.cfgRescale,
-          sampler: this.sampler, model_key: this.modelKey,
+          sampler: this.sampler,
+          prediction_type: this.predictionType,
+          model_key: this.modelKey,
           board_id: this._currentBoardId,
+          count: this.batchCount,
         },
       };
     },
@@ -292,7 +368,7 @@ function app() {
       if (what === 'all' || what === 'size')    { this.width = meta.width; this.height = meta.height; }
       if (what === 'all' || what === 'model')   { this.modelKey = meta.model_key || this.modelKey; }
       if (what === 'all' || what === 'seed')    { this.seed = meta.seed; }
-      if (what === 'all' || what === 'steps')   { this.steps = meta.steps; this.cfg = meta.cfg; this.cfgRescale = meta.cfg_rescale_multiplier; this.sampler = meta.sampler; }
+      if (what === 'all' || what === 'steps')   { this.steps = meta.steps; this.cfg = meta.cfg; this.cfgRescale = meta.cfg_rescale_multiplier; this.sampler = meta.sampler; this.predictionType = meta.prediction_type || 'default'; }
     },
 
     selectImageFromEvent(event) {
@@ -472,13 +548,80 @@ function app() {
 
     async registerCandidate(candidate) {
       try {
+        const quant = candidate.quantization || null;
+        const body = {
+          name: candidate.name,
+          base: candidate.base,
+          source_type: candidate.source_type,
+          ...(quant ? { quantization: quant } : {}),
+        };
         const resp = await fetch(`/api/v2/models/install?${new URLSearchParams({ source: candidate.source })}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: candidate.name, base: candidate.base, source_type: candidate.source_type }),
+          body: JSON.stringify(body),
         });
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
       } catch (e) { this._setError(`Register failed: ${e.message}`); }
+    },
+
+    // Extract "owner/repo" from a bare id or full HF URL.
+    _normaliseHfRepoId(raw) {
+      const s = raw.trim();
+      // https://huggingface.co/owner/repo  or  hf.co/owner/repo
+      const m = s.match(/(?:huggingface\.co|hf\.co)\/([^/]+\/[^/?#]+)/);
+      if (m) return m[1].replace(/\/$/, '');
+      return s;   // assume it's already "owner/repo"
+    },
+
+    // Mirror the backend scanner heuristic so the base auto-fills correctly.
+    _guessBaseFromId(id) {
+      const l = id.toLowerCase();
+      if (l.includes('sana'))                              return 'sana';
+      if (l.includes('xl') || l.includes('sdxl'))         return 'sdxl';
+      if (l.includes('2.0') || l.includes('2-') || l.includes('sd2')) return 'sd-2';
+      return 'sd-1';
+    },
+
+    // Called whenever the repoId input changes — keeps name and base in sync.
+    onHfRepoIdInput() {
+      const id = this._normaliseHfRepoId(this.hfInstall.repoId);
+      const short = id.split('/').pop() || '';
+      if (!this.hfInstall.name || this.hfInstall._nameAutoFilled) {
+        this.hfInstall.name = short;
+        this.hfInstall._nameAutoFilled = true;
+      }
+      this.hfInstall.base = this._guessBaseFromId(id);
+    },
+
+    async installFromHf() {
+      const repoId = this._normaliseHfRepoId(this.hfInstall.repoId);
+      if (!repoId || !repoId.includes('/')) {
+        this._setError('Enter a valid HuggingFace repo ID (owner/repo) or URL.');
+        return;
+      }
+      const name = this.hfInstall.name.trim() || repoId.split('/').pop();
+      this.hfInstall.pending = true;
+      try {
+        const body = {
+          name,
+          base: this.hfInstall.base,
+          source_type: 'hf_repo_id',
+          ...(this.hfInstall.apiKey.trim()    ? { hf_api_key:    this.hfInstall.apiKey.trim() }    : {}),
+          ...(this.hfInstall.quantization     ? { quantization:  this.hfInstall.quantization }      : {}),
+        };
+        const resp = await fetch(`/api/v2/models/install?${new URLSearchParams({ source: repoId })}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.loadModels();
+        // Reset form on success
+        this.hfInstall = { repoId: '', name: '', base: 'sd-1', apiKey: '', quantization: '', pending: false };
+      } catch (e) {
+        this._setError(`Install failed: ${e.message}`);
+      } finally {
+        this.hfInstall.pending = false;
+      }
     },
 
     async deleteModel(key) {
@@ -513,6 +656,19 @@ function app() {
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
       } catch (e) { this._setError(`Rename failed: ${e.message}`); }
+    },
+
+    async setModelQuantization(key, quantization) {
+      try {
+        const resp = await fetch(`/api/v2/models/${key}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          // Send empty string to explicitly clear quantization
+          body: JSON.stringify({ quantization: quantization || '' }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.loadModels();
+      } catch (e) { this._setError(`Could not update quantization: ${e.message}`); }
     },
 
     // ----------------------------------------------------------------
@@ -557,6 +713,7 @@ function app() {
         case 'cfg':           this.cfg = meta.cfg; break;
         case 'cfgRescale':    this.cfgRescale = meta.cfg_rescale_multiplier; break;
         case 'sampler':       this.sampler = meta.sampler; break;
+        case 'predictionType': this.predictionType = meta.prediction_type || 'default'; break;
       }
     },
 

@@ -44,6 +44,8 @@ class QueueStore:
                     cfg_rescale_multiplier=item.params.cfg_rescale_multiplier,
                     sampler=item.params.sampler,
                     model_key=item.params.model_key,
+                    board_id=item.params.board_id,
+                    prediction_type=item.params.prediction_type,
                     output_image_name=item.output_image_name,
                     error=item.error,
                     created_at=now,
@@ -103,6 +105,8 @@ def _row_to_domain(row: PersistedQueueItem) -> QueueItem:
         cfg_rescale_multiplier=row.cfg_rescale_multiplier,
         sampler=row.sampler,
         model_key=row.model_key,
+        board_id=row.board_id,
+        prediction_type=row.prediction_type if row.prediction_type else "default",
     )
     # Pass item_id explicitly so default_factory (_next_id) is NOT called.
     return QueueItem(

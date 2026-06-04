@@ -164,12 +164,13 @@ class QueueManager:
     async def prune(self) -> int:
         """Remove completed/failed/cancelled items. Returns count pruned."""
         terminal = {ItemStatus.COMPLETED, ItemStatus.FAILED, ItemStatus.CANCELLED}
-        to_remove = [
-            item_id
-            for item_id, item in self._all_items.items()
-            if item.status in terminal
-        ]
+        to_remove: list[int] = []
         async with self._lock:
+            to_remove = [
+                item_id
+                for item_id, item in self._all_items.items()
+                if item.status in terminal
+            ]
             for item_id in to_remove:
                 del self._all_items[item_id]
         if self._store and to_remove:

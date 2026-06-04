@@ -15,10 +15,13 @@ class InstallBody(BaseModel):
     base: str
     source_type: str = "hf_repo_id"
     hf_api_key: str | None = None
+    quantization: str | None = None
 
 
-class RenameBody(BaseModel):
-    name: str
+class UpdateBody(BaseModel):
+    """Used by PATCH /{key} — all fields optional; only supplied ones are changed."""
+    name: str | None = None
+    quantization: str | None = None
 
 
 @router.get("/")
@@ -49,16 +52,27 @@ async def install_model(source: str, body: InstallBody, request: Request):
         source=source,
         source_type=body.source_type,
         hf_api_key=body.hf_api_key,
+        quantization=body.quantization,
     )
     return _entry_to_dict(entry)
 
 
 @router.patch("/{key}")
-async def rename_model(key: str, body: RenameBody, request: Request):
-    """Rename a registered model."""
+async def update_model(key: str, body: UpdateBody, request: Request):
+    """Update name and/or quantization for a registered model."""
     registry = request.app.state.registry
     try:
-        entry = registry.rename(key, body.name)
+        entry = registry.get(key)
+        if entry is None:
+            raise ModelNotFoundError(f"No model with key {key!r}")
+        if body.name is not None:
+            entry = registry.rename(key, body.name)
+        if body.quantization is not None or (
+            # allow explicitly setting quantization to None via "" sentinel
+            body.quantization == ""
+        ):
+            quant = body.quantization if body.quantization else None
+            entry = registry.update_quantization(key, quant)
     except ModelNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return _entry_to_dict(entry)
@@ -100,12 +114,12 @@ def _entry_to_dict(entry: ModelEntry) -> dict:
     return {
         "key": entry.key,
         "name": entry.name,
-        "type": entry.base,
-        "hash": '',
-        "base": '',
+        "type": entry.base,   # legacy field kept for compat
+        "base": entry.base,
         "source": entry.source,
         "source_type": entry.source_type,
         "has_api_key": entry.hf_api_key is not None,
+        "quantization": entry.quantization,
         "files_missing": files_missing,
     }
 

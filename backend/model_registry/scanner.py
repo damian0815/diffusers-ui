@@ -73,6 +73,8 @@ def _looks_like_pipeline(path: Path) -> bool:
 def _guess_base(name: str) -> str:
     """Heuristically guess the model base from the name/repo-id."""
     name_lower = name.lower()
+    if "sana" in name_lower:
+        return "sana"
     if "xl" in name_lower or "sdxl" in name_lower:
         return "sdxl"
     if "2.0" in name_lower or "2-" in name_lower or "sd2" in name_lower:

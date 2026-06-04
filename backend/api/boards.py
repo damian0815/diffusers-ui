@@ -64,5 +64,5 @@ def _gallery_to_dict(gallery) -> dict:
     return {
         "board_id": gallery.board_id,
         "board_name": gallery.name,
-        "created_at": gallery.created_at.isoformat() if gallery.created_at else None,
+        "created_at": gallery.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if gallery.created_at else None,
     }

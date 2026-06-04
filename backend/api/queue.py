@@ -24,8 +24,10 @@ class BatchParams(BaseModel):
     cfg: float = 7.5
     cfg_rescale_multiplier: float = 0.0
     sampler: str = "euler_a"
+    prediction_type: str = "default"  # 'default' = don't override; else e.g. 'epsilon', 'v_prediction', 'flow_prediction'
     model_key: str
     board_id: str  # target gallery board; None = worker default
+    count: int = 1  # number of items to enqueue; seed is auto-incremented for each
 
 
 class EnqueueRequest(BaseModel):
@@ -205,11 +207,17 @@ def _parse_enqueue_request_annoying(body: dict) -> tuple[BatchParams, bool]:
 @router.post("/enqueue_batch")
 async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...)):
     """
-    Enqueue one generation job.
+    Enqueue one or more generation jobs.
 
     Accepts both the native flat format and the legacy InvokeAI graph format
     (auto-detected via the presence of ``batch.graph``).
-    Returns {"queue_id": str, "items": [<image-record-dict>]}.
+
+    When ``batch.count > 1`` the endpoint creates that many items.  If
+    ``batch.seed >= 0`` successive items receive seed, seed+1, seed+2, …
+    (reproducible multi-sample runs).  If ``batch.seed == -1`` every item
+    gets its own independent random seed.
+
+    Returns {"queue_id": str, "items": [<image-record-dict>, ...]}.
     """
     fmt = _detect_request_format(body)
     if fmt == "annoying":
@@ -217,39 +225,44 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
     else:
         batch, prepend = _parse_enqueue_request_clean(body)
 
-    #logger.info(f"enqueue_batch ({prepend=}) {batch}")
-
     queue    = request.app.state.queue
     registry = request.app.state.registry
-    seed     = batch.seed if batch.seed >= 0 else random.randint(0, 2**32 - 1)
+    base_seed = batch.seed if batch.seed >= 0 else None  # None → random per item
+    count = max(1, batch.count)
 
     if batch.board_id is None:
         raise ValueError("Missing board id")
 
-    params = ImageGenerationParams(
-        prompt=batch.prompt,
-        negative_prompt=batch.negative_prompt,
-        seed=seed,
-        width=batch.width,
-        height=batch.height,
-        steps=batch.steps,
-        cfg=batch.cfg,
-        cfg_rescale_multiplier=batch.cfg_rescale_multiplier,
-        sampler=batch.sampler,  # type: ignore[arg-type]
-        model_key=batch.model_key,
-        board_id=batch.board_id,
-    )
-    item = QueueItem(params=params)
-    await queue.enqueue(item, prepend=prepend)
-
-    model_entry = registry.get(params.model_key)
+    model_entry = registry.get(batch.model_key)
     model_name  = model_entry.name if model_entry else None
-    item_dict   = _queue_item_to_image_dict(item, model_name)
 
+    item_dicts: list[dict] = []
     broadcaster = request.app.state.broadcaster
-    await broadcaster.broadcast_event("queue_item_enqueued", item_dict)
 
-    return {"queue_id": queue_id, "items": [item_dict]}
+    for i in range(count):
+        seed = (base_seed + i) if base_seed is not None else random.randint(0, 2**32 - 1)
+        params = ImageGenerationParams(
+            prompt=batch.prompt,
+            negative_prompt=batch.negative_prompt,
+            seed=seed,
+            width=batch.width,
+            height=batch.height,
+            steps=batch.steps,
+            cfg=batch.cfg,
+            cfg_rescale_multiplier=batch.cfg_rescale_multiplier,
+            sampler=batch.sampler,  # type: ignore[arg-type]
+            prediction_type=batch.prediction_type,
+            model_key=batch.model_key,
+            board_id=batch.board_id,
+        )
+        item = QueueItem(params=params)
+        await queue.enqueue(item, prepend=prepend)
+
+        item_dict = _queue_item_to_image_dict(item, model_name)
+        await broadcaster.broadcast_event("queue_item_enqueued", item_dict)
+        item_dicts.append(item_dict)
+
+    return {"queue_id": queue_id, "items": item_dicts}
 
 
 @router.get("/i/{item_id}")
@@ -377,6 +390,7 @@ def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
         "cfg": p.cfg,
         "cfg_rescale_multiplier": p.cfg_rescale_multiplier,
         "sampler": p.sampler,
+        "prediction_type": p.prediction_type,
         "model_key": p.model_key,
         "model_name": model_name,
         "board_id": p.board_id,

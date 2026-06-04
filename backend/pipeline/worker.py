@@ -160,8 +160,19 @@ class PipelineWorker:
             logger.error("Pipeline load failed: %s", exc)
             return
 
-        # Swap scheduler based on sampler
-        await asyncio.to_thread(self._apply_scheduler, pipeline, batch[0].params.sampler)
+        # Swap scheduler based on sampler (not applicable to SANA — it uses its
+        # own FlowMatchEulerDiscreteScheduler and we leave it untouched)
+        is_sdxl: bool = entry.base == "sdxl"
+        is_sana: bool = entry.base == "sana"
+        preview_variant = "sdxl" if is_sdxl else ("sana" if is_sana else "sd1")
+
+        if not is_sana:
+            await asyncio.to_thread(
+                self._apply_scheduler,
+                pipeline,
+                batch[0].params.sampler,
+                batch[0].params.prediction_type,
+            )
 
         for item in batch:
             await self._queue.mark_processing(item)
@@ -170,13 +181,21 @@ class PipelineWorker:
         prompts = [item.params.prompt for item in batch]
         neg_prompts = [item.params.negative_prompt for item in batch]
         seeds = [item.params.seed for item in batch]
-        is_sdxl: bool = entry.base == "sdxl"
 
-        # Encode prompts with Compel (supports weighted syntax and long prompts).
-        # Runs in a thread because text encoding calls the GPU-bound text encoder.
-        prompt_kwargs = await asyncio.to_thread(
-            build_prompt_embeds, pipeline, prompts, neg_prompts, is_sdxl=is_sdxl
-        )
+        # Encode prompts.
+        # SANA uses a Gemma text encoder — Compel doesn't support it.
+        # Pass raw strings directly; the pipeline handles encoding internally.
+        if is_sana:
+            prompt_kwargs: dict = {
+                "prompt": prompts if len(prompts) > 1 else prompts[0],
+                "negative_prompt": neg_prompts if len(neg_prompts) > 1 else neg_prompts[0],
+            }
+        else:
+            # Encode prompts with Compel (supports weighted syntax and long prompts).
+            # Runs in a thread because text encoding calls the GPU-bound text encoder.
+            prompt_kwargs = await asyncio.to_thread(
+                build_prompt_embeds, pipeline, prompts, neg_prompts, is_sdxl=is_sdxl
+            )
 
         step_counter: dict[str, int] = {"n": 0}
         event_loop = asyncio.get_event_loop()
@@ -213,7 +232,7 @@ class PipelineWorker:
                     for i, item in enumerate(batch):
                         try:
                             preview = latents_to_preview_image(
-                                sample[i: i + 1], is_sdxl=is_sdxl
+                                sample[i: i + 1], variant=preview_variant
                             )
                             asyncio.run_coroutine_threadsafe(
                                 self._broadcaster.broadcast(
@@ -243,20 +262,20 @@ class PipelineWorker:
             # that capture_peak() below reflects only this inference run.
             self._mem_advisor.reset_peak()
 
-            # AMP autocast: resolves mixed float16/float32 dtype mismatches
-            # (e.g. float16 latents hitting float32 VAE biases) without
-            # manually upcasting any module.  No-op on CPU/MPS.
+            # AMP autocast:
+            # - SD1/SDXL: float16 autocast resolves mixed dtype mismatches.
+            # - SANA: uses bfloat16 natively; float16 autocast would be wrong.
+            # - CPU/MPS: no-op regardless.
             import contextlib
-            _device_type = settings.device if not settings.device.startswith("cuda") else "cuda"
-            _autocast_ctx = (
-                torch.amp.autocast(device_type=_device_type, dtype=torch.float16)
-                if settings.device.startswith("cuda")
-                else contextlib.nullcontext()
-            )
+            if settings.device.startswith("cuda") and not is_sana:
+                _device_type = "cuda"
+                _autocast_ctx = torch.amp.autocast(device_type=_device_type, dtype=torch.float16)
+            else:
+                _autocast_ctx = contextlib.nullcontext()
 
             def _run_pipeline():
                 with _autocast_ctx:
-                    return pipeline(
+                    call_kwargs = dict(
                         **prompt_kwargs,
                         width=params.width,
                         height=params.height,
@@ -266,6 +285,11 @@ class PipelineWorker:
                         callback_on_step_end=on_step,
                         callback_on_step_end_tensor_inputs=["latents"],
                     )
+                    if not is_sana:
+                        # guidance_rescale is an SD1/SDXL concept;
+                        # SanaPipeline doesn't accept this argument.
+                        call_kwargs['guidance_rescale'] = params.cfg_rescale_multiplier
+                    return pipeline(**call_kwargs)
 
             result = await asyncio.to_thread(_run_pipeline)
 
@@ -338,7 +362,7 @@ class PipelineWorker:
                 },
             )
 
-    def _apply_scheduler(self, pipeline, sampler: str) -> None:
+    def _apply_scheduler(self, pipeline, sampler: str, prediction_type: str = 'default') -> None:
         """Swap the pipeline scheduler in-place based on the sampler name."""
         scheduler_class_name_and_kwargs = SAMPLER_MAP.get(sampler)
         if scheduler_class_name_and_kwargs is None:
@@ -355,6 +379,14 @@ class PipelineWorker:
             use_karras = sampler in KARRAS_SAMPLERS
             if use_karras:
                 config["use_karras_sigmas"] = True
+            # Apply prediction_type override when requested (skip for flow-match schedulers
+            # which use their own step logic and don't accept this parameter).
+            if (
+                prediction_type
+                and prediction_type != 'default'
+                and scheduler_class_name != "SDPipelineInferenceFlowMatchEulerDiscreteScheduler"
+            ):
+                config["prediction_type"] = prediction_type
             config.update(**scheduler_kwargs)
             pipeline.scheduler = scheduler_cls.from_config(config, **scheduler_kwargs)
         except Exception as e:
@@ -376,7 +408,7 @@ class PipelineWorker:
                 )
                 await session.commit()
                 # Build event payload (same shape as _image_record_to_dict / _image_record_to_dict)
-                created_at = record.created_at.isoformat() if record.created_at else None
+                created_at = record.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if record.created_at else None
                 event_data = {
                     "image_name": image_name,
                     "board_id": board_id,
@@ -389,6 +421,7 @@ class PipelineWorker:
                     "cfg": item.params.cfg,
                     "cfg_rescale_multiplier": item.params.cfg_rescale_multiplier,
                     "sampler": item.params.sampler,
+                    "prediction_type": item.params.prediction_type,
                     "model_key": item.params.model_key,
                     "model_name": model_name,
                     "starred": False,

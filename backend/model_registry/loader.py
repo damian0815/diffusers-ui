@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import gc
 import logging
 
 from backend.config import settings
 from backend.domain import ModelEntry
+
+# Sub-module names that hold the bulk of VRAM across all pipeline types.
+_HEAVY_SUBMODULES = (
+    "transformer", "unet",
+    "text_encoder", "text_encoder_2", "text_encoder_3",
+    "vae", "image_encoder",
+)
 
 
 class PipelineLoadError(Exception):
@@ -26,15 +34,18 @@ class PipelineLoader:
             return self._pipeline
         self._unload()
         try:
-            from diffusers import DiffusionPipeline
-            kwargs: dict = {"torch_dtype": _dtype_for_device(settings.device)}
-            if entry.hf_api_key:
-                kwargs["token"] = entry.hf_api_key
-            logging.info(f"Loading model {entry.name} from {entry.source} onto {settings.device} @{settings.dtype}")
-            self._pipeline = DiffusionPipeline.from_pretrained(
-                entry.source, **kwargs
-            ).to(device=settings.device)
-            _enable_fast_attention(self._pipeline)
+            if entry.base == "sana":
+                self._pipeline = _load_sana_pipeline(entry)
+            else:
+                from diffusers import DiffusionPipeline
+                kwargs: dict = {"torch_dtype": _dtype_for_device(settings.device)}
+                if entry.hf_api_key:
+                    kwargs["token"] = entry.hf_api_key
+                logging.info(f"Loading model {entry.name} from {entry.source} onto {settings.device} @{settings.dtype}")
+                self._pipeline = DiffusionPipeline.from_pretrained(
+                    entry.source, **kwargs
+                ).to(device=settings.device)
+                _enable_fast_attention(self._pipeline)
             self._loaded_key = entry.key
         except Exception as exc:
             raise PipelineLoadError(
@@ -43,19 +54,144 @@ class PipelineLoader:
         return self._pipeline
 
     def _unload(self) -> None:
-        if self._pipeline is not None:
-            del self._pipeline
-            self._pipeline = None
-            self._loaded_key = None
-            # Free GPU memory if applicable
-            if settings.device == "cuda":
-                import torch
+        if self._pipeline is None:
+            return
+        logging.info("Unloading pipeline (key=%s)", self._loaded_key)
+        pipeline = self._pipeline
+        self._pipeline = None
+        self._loaded_key = None
+
+        try:
+            import torch
+            is_cuda = settings.device.startswith("cuda")
+
+            # ── Step 1: strip accelerate device-map hooks ────────────────
+            # device_map pipelines (e.g. quantised SANA) register forward
+            # hooks on every sub-module that hold strong references.  Removing
+            # them lets the GC collect the modules once we del the pipeline.
+            try:
+                from accelerate.hooks import remove_hook_from_module
+                for name in _HEAVY_SUBMODULES:
+                    mod = getattr(pipeline, name, None)
+                    if mod is not None:
+                        remove_hook_from_module(mod, recurse=True)
+            except Exception:
+                pass  # accelerate not installed, or no hooks — fine either way
+
+            # ── Step 2: move sub-modules to CPU ─────────────────────────
+            # Calling .to("cpu") replaces each CUDA tensor with a CPU copy
+            # and releases the CUDA allocation *immediately*, before GC runs.
+            # This is the most reliable way to free VRAM on model switch.
+            if is_cuda:
+                for name in _HEAVY_SUBMODULES:
+                    mod = getattr(pipeline, name, None)
+                    if mod is None:
+                        continue
+                    try:
+                        mod.to("cpu")
+                    except Exception:
+                        pass  # quantised modules may not support .to()
+
+            # ── Step 3: release Python object and run GC ─────────────────
+            del pipeline
+            gc.collect()
+
+            # ── Step 4: return freed blocks to the CUDA allocator ────────
+            if is_cuda and torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+        except Exception:
+            logging.exception("Error during pipeline unload — VRAM may not be fully freed")
 
     @property
     def loaded_key(self) -> str | None:
         return self._loaded_key
 
+
+# ---------------------------------------------------------------------------
+# SANA-specific loader
+# ---------------------------------------------------------------------------
+
+def _load_sana_pipeline(entry: ModelEntry):
+    """
+    Load a SanaPipeline with optional bitsandbytes quantization.
+
+    SANA dtype requirements:
+      - The full pipeline is loaded in float32 so the VAE stays stable.
+      - text_encoder and transformer are then cast to bfloat16.
+    With quantization (int8 / int4):
+      - Both text_encoder and transformer are loaded with BitsAndBytesConfig.
+      - device_map="balanced" handles placement automatically (no manual .to()).
+    """
+    import torch
+    from diffusers import SanaPipeline
+
+    quant = entry.quantization  # None | 'int8' | 'int4'
+    logging.info(
+        "Loading SANA model %r from %s (quantization=%s)",
+        entry.name, entry.source, quant or "none",
+    )
+
+    if quant in ("int8", "int4"):
+        try:
+            from transformers import BitsAndBytesConfig as TransformersBnBConfig, AutoModel
+            from diffusers import BitsAndBytesConfig as DiffusersBnBConfig, SanaTransformer2DModel
+        except ImportError as exc:
+            raise PipelineLoadError(
+                "bitsandbytes is required for quantized SANA loading. "
+                "Install it with: pip install bitsandbytes"
+            ) from exc
+
+        load_in_8bit = quant == "int8"
+        load_in_4bit = quant == "int4"
+
+        bnb_kwargs_te = dict(load_in_8bit=load_in_8bit, load_in_4bit=load_in_4bit)
+        bnb_kwargs_tr = dict(load_in_8bit=load_in_8bit, load_in_4bit=load_in_4bit)
+
+        te_quant_cfg = TransformersBnBConfig(**bnb_kwargs_te)
+        text_encoder = AutoModel.from_pretrained(
+            entry.source,
+            subfolder="text_encoder",
+            quantization_config=te_quant_cfg,
+            torch_dtype=torch.bfloat16,
+            token=entry.hf_api_key,
+        )
+
+        tr_quant_cfg = DiffusersBnBConfig(**bnb_kwargs_tr)
+        transformer = SanaTransformer2DModel.from_pretrained(
+            entry.source,
+            subfolder="transformer",
+            quantization_config=tr_quant_cfg,
+            torch_dtype=torch.bfloat16,
+            token=entry.hf_api_key,
+        )
+
+        pipeline = SanaPipeline.from_pretrained(
+            entry.source,
+            text_encoder=text_encoder,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+            device_map="balanced",
+            token=entry.hf_api_key,
+        )
+    else:
+        # Standard (non-quantized) SANA loading
+        load_kwargs: dict = {"torch_dtype": torch.float32}
+        if entry.hf_api_key:
+            load_kwargs["token"] = entry.hf_api_key
+        pipeline = SanaPipeline.from_pretrained(entry.source, **load_kwargs)
+        pipeline.to(device=settings.device)
+        # Cast the heavy compute modules to bfloat16 to halve VRAM usage
+        pipeline.text_encoder.to(torch.bfloat16)
+        pipeline.transformer = pipeline.transformer.to(torch.bfloat16)
+
+    return pipeline
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _dtype_for_device(device: str):
     """Return the appropriate torch dtype for the given device."""

@@ -40,6 +40,7 @@ class ModelRegistry:
         source: str,
         source_type: str,
         hf_api_key: str | None = None,
+        quantization: str | None = None,
     ) -> ModelEntry:
         """Create a new entry with a generated UUID key and register it."""
         entry = ModelEntry(
@@ -49,6 +50,7 @@ class ModelRegistry:
             source=source,
             source_type=source_type,  # type: ignore[arg-type]
             hf_api_key=hf_api_key,
+            quantization=quantization,
         )
         return self.add(entry)
 
@@ -58,6 +60,15 @@ class ModelRegistry:
         if entry is None:
             raise ModelNotFoundError(f"No model with key {key!r}")
         entry.name = new_name
+        self._save()
+        return entry
+
+    def update_quantization(self, key: str, quantization: str | None) -> ModelEntry:
+        """Set the quantization level for a registered model."""
+        entry = self._entries.get(key)
+        if entry is None:
+            raise ModelNotFoundError(f"No model with key {key!r}")
+        entry.quantization = quantization
         self._save()
         return entry
 

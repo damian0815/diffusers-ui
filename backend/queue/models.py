@@ -31,6 +31,8 @@ class PersistedQueueItem(Base):
     cfg_rescale_multiplier = Column(Float, nullable=False, default=0.0)
     sampler = Column(String, nullable=False)
     model_key = Column(String, nullable=False)
+    board_id = Column(String, nullable=True)           # target gallery board
+    prediction_type = Column(String, nullable=False, default="default")
 
     output_image_name = Column(String, nullable=True)
     error = Column(String, nullable=True)

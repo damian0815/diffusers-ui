@@ -135,8 +135,9 @@ def _load_taesd_decoder(variant: str, device: str):
     """
     Load (or return a cached) TAESD decoder for *variant* on *device*.
 
-    variant: "sd1" → taesd_decoder.pth (4-channel SD 1.x / SDXL-compatible)
-             "sdxl" → taesdxl_decoder.pth
+    variant: "sd1"  → taesd_decoder.pth    Decoder(4)     — 4-ch latents, 8× upscale
+             "sdxl" → taesdxl_decoder.pth   Decoder(4)     — 4-ch latents, 8× upscale
+             "sana" → taesana_decoder.pth   F32Decoder(32) — 32-ch latents, 32× upscale
     """
     key = (variant, device)
     if key in _taesd_cache:
@@ -146,12 +147,24 @@ def _load_taesd_decoder(variant: str, device: str):
         if key in _taesd_cache:          # double-checked
             return _taesd_cache[key]
 
-        weight_name = "taesdxl_decoder.pth" if variant == "sdxl" else "taesd_decoder.pth"
+        _weight_map = {
+            "sdxl": "taesdxl_decoder.pth",
+            "sana": "taesana_decoder.pth",
+            "sd1":  "taesd_decoder.pth",
+        }
+        weight_name = _weight_map.get(variant, "taesd_decoder.pth")
         weight_path = _TAESD_DIR / weight_name
 
         try:
-            import taesd as _taesd_module  # noqa: PLC0415 (imported inside fn intentionally)
-            dec = _taesd_module.Decoder().to(device).requires_grad_(False)
+            import taesd as _taesd_module  # noqa: PLC0415
+            # SANA uses F32Decoder (32-channel latents, 32× spatial upscaling).
+            # All other variants use the standard 4-channel Decoder.
+            if variant == "sana":
+                dec = _taesd_module.F32Decoder(latent_channels=32)
+            else:
+                dec = _taesd_module.Decoder(latent_channels=4)
+            dec = dec.to(device)
+            dec.requires_grad_(False)
             dec.load_state_dict(
                 torch.load(weight_path, map_location=device, weights_only=True)
             )
@@ -167,12 +180,11 @@ def _load_taesd_decoder(variant: str, device: str):
             return None
 
 
-def _latents_to_taesd_image(latents: torch.Tensor, *, is_sdxl: bool = False) -> bytes | None:
+def _latents_to_taesd_image(latents: torch.Tensor, *, variant: str = "sd1") -> bytes | None:
     """
     Decode latents with TAESD and return JPEG bytes, or return None if the
     decoder could not be loaded (caller falls back to approx).
     """
-    variant = "sdxl" if is_sdxl else "sd1"
     device = str(latents.device)
     dec = _load_taesd_decoder(variant, device)
     if dec is None:
@@ -189,7 +201,12 @@ def _latents_to_taesd_image(latents: torch.Tensor, *, is_sdxl: bool = False) -> 
     return buf.getvalue()
 
 
-def latents_to_preview_image(latents: torch.Tensor, *, is_sdxl: bool = False) -> bytes:
+def latents_to_preview_image(
+    latents: torch.Tensor,
+    *,
+    is_sdxl: bool = False,
+    variant: str | None = None,
+) -> bytes:
     """
     Convert a latent tensor to a preview JPEG.
 
@@ -199,17 +216,29 @@ def latents_to_preview_image(latents: torch.Tensor, *, is_sdxl: bool = False) ->
     Args:
         latents:  shape (1, C, H, W) — single-item latent from a step callback
         is_sdxl:  select SDXL weights / projection factors when True
+                  (ignored when *variant* is given explicitly)
+        variant:  TAESD variant — "sd1", "sdxl", or "sana".
+                  When None, derived from *is_sdxl*.
 
     Returns:
         JPEG bytes suitable for WebSocket transmission.
     """
+    if variant is None:
+        variant = "sdxl" if is_sdxl else "sd1"
+
     if settings.preview_method == "taesd":
-        result = _latents_to_taesd_image(latents, is_sdxl=is_sdxl)
+        result = _latents_to_taesd_image(latents, variant=variant)
         if result is not None:
             return result
         # Fall through to approx if TAESD is unavailable
 
-    return _latents_to_approx_image(latents, is_sdxl=is_sdxl)
+    # Approx does not support SANA's 32-channel latents — return empty 1×1 JPEG
+    if variant == "sana":
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (64, 64, 64)).save(buf, format="JPEG")
+        return buf.getvalue()
+
+    return _latents_to_approx_image(latents, is_sdxl=(variant == "sdxl"))
 
 
 class PreviewBroadcaster:

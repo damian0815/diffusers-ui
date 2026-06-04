@@ -81,6 +81,14 @@
             <button class="icon-btn generate-priority" @click="generate(true)"
                     :disabled="isEnqueuing"
                     title="Front of queue  ·  ⌘⇧↩">⏫</button>
+            <div class="field batch-count-field" title="Number of images per prompt variant (seed auto-increments)">
+              <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
+                     style="width:56px;text-align:center" title="Batch count">
+            </div>
+            <span class="batch-hint-pill"
+                  x-show="_totalGenCount() > 1"
+                  x-text="`${_totalGenCount()} gens`"
+                  title="Total generations: prompt variants × batch count"></span>
           </div>
 
           <div id="queue-status">
@@ -185,6 +193,17 @@
                 <option value="kdpm_2_a">KDPM2 A</option>
               </select>
             </div>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Prediction Type</label>
+            <select x-model="predictionType">
+              <option value="default">Default (scheduler built-in)</option>
+              <option value="epsilon">epsilon</option>
+              <option value="v_prediction">v_prediction</option>
+              <option value="sample">sample</option>
+              <option value="flow_prediction">flow_prediction</option>
+            </select>
           </div>
 
         </div><!-- /panel-scroll -->
@@ -311,6 +330,13 @@
             <div class="info-field">
               <span class="info-label">Sampler</span>
               <span class="info-value" x-text="selectedImageMeta?.sampler || '—'"></span>
+            </div>
+          </div>
+          <div class="info-row">
+            <button class="info-adopt-btn" @click="adoptField('predictionType')" title="Use prediction type">↩</button>
+            <div class="info-field">
+              <span class="info-label">Prediction Type</span>
+              <span class="info-value" x-text="selectedImageMeta?.prediction_type || 'default'"></span>
             </div>
           </div>
 
@@ -603,6 +629,57 @@
     <div class="fs-body">
       <div class="models-list">
 
+        <!-- ── Add from HuggingFace ── -->
+        <div class="hf-install-card">
+          <div class="hf-install-title">🤗 Add from HuggingFace</div>
+          <div class="hf-install-row">
+            <input class="hf-repo-input" type="text"
+                   x-model="hfInstall.repoId"
+                   @input="onHfRepoIdInput()"
+                   @keydown.enter="installFromHf()"
+                   placeholder="owner/repo-name  or  huggingface.co/owner/repo"
+                   :disabled="hfInstall.pending">
+          </div>
+          <div class="hf-install-row hf-install-meta">
+            <div class="field" style="flex:2">
+              <label class="field-label">Name</label>
+              <input type="text" x-model="hfInstall.name"
+                     @input="hfInstall._nameAutoFilled = false"
+                     placeholder="Display name"
+                     :disabled="hfInstall.pending">
+            </div>
+            <div class="field" style="flex:1">
+              <label class="field-label">Base</label>
+              <select x-model="hfInstall.base" :disabled="hfInstall.pending">
+                <option value="sd-1">SD 1.x</option>
+                <option value="sd-2">SD 2.x</option>
+                <option value="sdxl">SDXL</option>
+                <option value="sana">SANA</option>
+              </select>
+            </div>
+            <div class="field" style="flex:1">
+              <label class="field-label">Quantization</label>
+              <select x-model="hfInstall.quantization" :disabled="hfInstall.pending">
+                <option value="">None</option>
+                <option value="int8">INT8</option>
+                <option value="int4">INT4</option>
+              </select>
+            </div>
+          </div>
+          <div class="hf-install-row hf-install-footer">
+            <input type="password" x-model="hfInstall.apiKey"
+                   placeholder="HF API key (private models only)"
+                   :disabled="hfInstall.pending"
+                   style="flex:1">
+            <button class="btn-primary"
+                    @click="installFromHf()"
+                    :disabled="hfInstall.pending || !hfInstall.repoId.trim()"
+                    :class="{'is-loading': hfInstall.pending}">
+              <span x-text="hfInstall.pending ? '· · ·' : '+ Add model'"></span>
+            </button>
+          </div>
+        </div>
+
         <!-- ── Discover bar ── -->
         <div class="models-discover-bar">
           <input type="text" x-model="localScanPath" placeholder="/path/to/local/models">
@@ -628,10 +705,20 @@
                 <span class="model-discover-source" x-text="c.source"></span>
               </div>
             </div>
-            <button class="btn-secondary"
-                    :disabled="isInstalled(c)"
-                    @click="registerCandidate(c)"
-                    x-text="isInstalled(c) ? '✓ Installed' : '+ Add'"></button>
+            <div class="model-discover-actions">
+              <select class="quant-select"
+                      x-show="!isInstalled(c)"
+                      @change="c.quantization = $event.target.value"
+                      title="Quantization (requires bitsandbytes)">
+                <option value="">No quantization</option>
+                <option value="int8">INT8 (8-bit)</option>
+                <option value="int4">INT4 (4-bit)</option>
+              </select>
+              <button class="btn-secondary"
+                      :disabled="isInstalled(c)"
+                      @click="registerCandidate(c)"
+                      x-text="isInstalled(c) ? '✓ Installed' : '+ Add'"></button>
+            </div>
           </div>
         </template>
 
@@ -677,6 +764,21 @@
             <div class="model-row-meta">
               <span class="model-base-badge" x-text="m.base"></span>
               <span class="model-row-source" x-text="m.source"></span>
+            </div>
+            <div class="model-row-quant">
+              <label class="field-label" style="margin:0;font-size:11px">Quantization</label>
+              <select class="quant-select"
+                      :value="m.quantization || ''"
+                      @change="setModelQuantization(m.key, $event.target.value)"
+                      title="Quantization (requires bitsandbytes; reload model to apply)">
+                <option value="">None</option>
+                <option value="int8">INT8 (8-bit)</option>
+                <option value="int4">INT4 (4-bit)</option>
+              </select>
+              <span class="quant-hint" x-show="m.quantization"
+                    title="Model will be reloaded with new quantization on next generation">
+                (applied on next load)
+              </span>
             </div>
           </div>
         </template>

@@ -21,7 +21,8 @@ class ImageGenerationParams:
     cfg_rescale_multiplier: float
     sampler: Sampler
     model_key: str               # key into models.json
-    board_id: str| None = None   # target
+    board_id: str | None = None  # target
+    prediction_type: str = 'default'  # 'default' = don't override; else e.g. 'epsilon', 'v_prediction', 'flow_prediction'
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class CriticalParams:
     cfg_rescale_multiplier: float
     sampler: str
     model_key: str
+    prediction_type: str = 'default'
 
 
 class ItemStatus(str, Enum):
@@ -75,10 +77,11 @@ class QueueItem:
 class ModelEntry:
     key: str                             # stable UUID, generated on first registration
     name: str                            # user-facing label
-    base: Literal['sd-1', 'sd-2', 'sdxl']
+    base: Literal['sd-1', 'sd-2', 'sdxl', 'sana']
     source: str                          # HF repo ID ("stabilityai/...") or absolute local path
     source_type: Literal['hf_repo_id', 'local_path']
     hf_api_key: str | None = None        # stored only if user provided one
+    quantization: str | None = None      # 'int8', 'int4', or None (SANA only for now)
 
 
 # ---------------------------------------------------------------------------

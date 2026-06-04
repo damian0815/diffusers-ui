@@ -173,11 +173,12 @@ def _image_record_to_dict(record) -> dict:
         "cfg_rescale_multiplier": record.cfg_rescale_multiplier,
         "sampler": record.sampler,
         "scheduler": record.sampler, # duplicate, for annoying client
+        "prediction_type": getattr(record, 'prediction_type', 'default') or 'default',
         "model_key": record.model_key,
         "model_name": record.model_name,
         "starred": record.starred,
         "gen_seq": record.gen_seq,
-        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "created_at": record.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if record.created_at else None,
         "tags": [t.name for t in record.tags],
     }
 

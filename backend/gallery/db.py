@@ -25,6 +25,14 @@ def _apply_inline_migrations(conn) -> None:
         existing = {c["name"] for c in inspector.get_columns("images")}
         if "gen_seq" not in existing:
             conn.execute(text("ALTER TABLE images ADD COLUMN gen_seq INTEGER"))
+        if "prediction_type" not in existing:
+            conn.execute(text("ALTER TABLE images ADD COLUMN prediction_type VARCHAR DEFAULT 'default'"))
+    if "queue_items" in tables:
+        existing = {c["name"] for c in inspector.get_columns("queue_items")}
+        if "board_id" not in existing:
+            conn.execute(text("ALTER TABLE queue_items ADD COLUMN board_id VARCHAR"))
+        if "prediction_type" not in existing:
+            conn.execute(text("ALTER TABLE queue_items ADD COLUMN prediction_type VARCHAR NOT NULL DEFAULT 'default'"))
 
 
 async def init_db() -> None:

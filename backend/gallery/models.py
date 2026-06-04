@@ -51,6 +51,7 @@ class ImageRecord(Base):
     cfg = Column(Float, default=7.5)
     cfg_rescale_multiplier = Column(Float, default=0.0)
     sampler = Column(String, default="")
+    prediction_type = Column(String, default="default")
     model_key = Column(String, default="")
     model_name = Column(String, default="")
 
