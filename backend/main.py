@@ -144,6 +144,8 @@ app = FastAPI(title="diffusers-ui", lifespan=lifespan)
 app.state.queue = queue_manager
 app.state.registry = model_registry
 app.state.broadcaster = broadcaster
+app.state.loader = pipeline_loader
+app.state.worker = worker
 
 app.include_router(queue.router)
 app.include_router(images.router)

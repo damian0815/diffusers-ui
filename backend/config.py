@@ -38,13 +38,17 @@ class Settings:
     def dtype(self) -> torch.dtype:
         if self.device == "cuda":
             # float16 is required for Flash Attention 2 on Ampere/Ada GPUs (e.g. RTX 3090)
-            return torch.float16
+            return torch.bfloat16
         elif self.device == "mps":
             return torch.float32
         elif self.device == "cpu":
             return torch.float32
         else:
             raise NotImplementedError(f"Unhandled device {self.device}")
+
+    @property
+    def vae_dtype(self) -> torch.dtype:
+        return torch.float32
 
 
 # Singleton — import this everywhere

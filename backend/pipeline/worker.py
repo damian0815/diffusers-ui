@@ -41,12 +41,23 @@ USE_PRED_ORIGINAL_SAMPLE: bool = True  # ← set to True to enable
 
 # Map domain sampler names → diffusers scheduler class names
 SAMPLER_MAP: dict[str, tuple[str, dict]] = {
-    "dpmpp_sde_k": ("DPMSolverSDEScheduler", {}),
-    "dpmpp_sde": ("DPMSolverSDEScheduler", {}),
-    "dpmpp_2m_sde_k": ("DPMSolverMultistepScheduler", {}),
-    "dpmpp_2m_sde": ("DPMSolverMultistepScheduler", {}),
-    "dpmpp_2m": ("DPMSolverMultistepScheduler", {}),
-    "dpmpp_3m": ("DPMSolverMultistepScheduler", {}),
+    "dpmpp": ("DPMSolverMultistepScheduler", dict(
+        algorithm_type="dpmsolver++", use_karras_sigmas=False, solver_order=1
+    )),
+    "dpmpp_sde_k": ("DPMSolverSDEScheduler", dict(use_karras_sigmas=True)),
+    "dpmpp_sde": ("DPMSolverSDEScheduler", dict(use_karras_sigmas=False)),
+    "dpmpp_2m_sde_k": ("DPMSolverMultistepScheduler", dict(
+        algorithm_type="sde-dpmsolver++", use_karras_sigmas=True, solver_order=2
+    )),
+    "dpmpp_2m_sde": ("DPMSolverMultistepScheduler", dict(
+        algorithm_type="sde-dpmsolver++", use_karras_sigmas=False, solver_order=2
+    )),
+    "dpmpp_2m": ("DPMSolverMultistepScheduler", dict(
+        algorithm_type="dpmsolver++", use_karras_sigmas=False, solver_order=2
+    )),
+    "dpmpp_3m": ("DPMSolverMultistepScheduler", dict(
+        algorithm_type="dpmsolver++", use_karras_sigmas=False, solver_order=3
+    )),
     "euler": ("EulerDiscreteScheduler", {}),
     "euler_a": ("EulerAncestralDiscreteScheduler", {}),
     "euler_flowmatch_dynshift": ("SDPipelineInferenceFlowMatchEulerDiscreteScheduler", dict(shift=1, use_dynamic_shifting=True, time_shift_type='linear')),
@@ -134,6 +145,11 @@ class PipelineWorker:
         """Wait until no generation is actively running (safe to exit after this)."""
         await self._idle.wait()
 
+    @property
+    def is_idle(self) -> bool:
+        """True when no generation is currently in flight."""
+        return self._idle.is_set()
+
     async def _run_batch(self, batch: list[QueueItem]) -> None:
         """Run a single batch: load model, generate, save, record."""
         entry = self._registry.get(batch[0].params.model_key)
@@ -166,13 +182,14 @@ class PipelineWorker:
         is_sana: bool = entry.base == "sana"
         preview_variant = "sdxl" if is_sdxl else ("sana" if is_sana else "sd1")
 
-        if not is_sana:
-            await asyncio.to_thread(
-                self._apply_scheduler,
-                pipeline,
-                batch[0].params.sampler,
-                batch[0].params.prediction_type,
-            )
+        #if not is_sana:
+        # apply the scheduler, even on Sana
+        await asyncio.to_thread(
+            self._apply_scheduler,
+            pipeline,
+            batch[0].params.sampler,
+            batch[0].params.prediction_type,
+        )
 
         for item in batch:
             await self._queue.mark_processing(item)
@@ -389,6 +406,7 @@ class PipelineWorker:
                 config["prediction_type"] = prediction_type
             config.update(**scheduler_kwargs)
             pipeline.scheduler = scheduler_cls.from_config(config, **scheduler_kwargs)
+            print("scheduler prediction type:", getattr(pipeline.scheduler.config, "prediction_type", None))
         except Exception as e:
             logger.warning(f"Could not swap scheduler for sampler {sampler}: {repr(e)}")
 

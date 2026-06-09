@@ -106,6 +106,35 @@ async def scan_local_dir_endpoint(path: str, request: Request):
     return {"candidates": [_entry_to_dict(c) for c in candidates]}
 
 
+@router.get("/loaded")
+async def get_loaded_model(request: Request):
+    """Return the key of the currently loaded model pipeline (null if none)."""
+    loader = request.app.state.loader
+    return {"loaded_key": loader.loaded_key}
+
+
+@router.post("/unload_cache")
+async def unload_model_cache(request: Request):
+    """
+    Unload the currently loaded model pipeline from memory/VRAM.
+
+    Returns 409 if a generation is currently in progress (safe-guard —
+    unloading while the pipeline is running would corrupt the inference).
+    """
+    worker = request.app.state.worker
+    if not worker.is_idle:
+        raise HTTPException(
+            status_code=409,
+            detail="Generation in progress — cannot unload model now. "
+                   "Wait for the current job to finish.",
+        )
+    loader = request.app.state.loader
+    if loader.loaded_key is None:
+        return {"unloaded": False, "message": "No model was loaded."}
+    await asyncio.to_thread(loader.unload)
+    return {"unloaded": True}
+
+
 def _entry_to_dict(entry: ModelEntry) -> dict:
     files_missing = False
     if entry.source_type == "local_path":

@@ -79,6 +79,9 @@ function app() {
       await this.loadModels();
       this.setupKeyboardShortcuts();
 
+      // Initialise session-scoped state that can't be serialised as plain data
+      this._finishedItemIds = new Set();
+
       // Auto-refresh queue details when on the queue tab
       this.$watch('activeTab', (tab) => {
         clearInterval(this._queueTimer);
@@ -174,9 +177,16 @@ function app() {
         this._refreshDisplay();
       });
 
+      // When the WebSocket reconnects after a dropout, re-reconcile queue state
+      // so we pick up anything that happened while the connection was down.
+      window.addEventListener('ws-reconnected', () => {
+        this._reconcileQueue();
+      });
+
       // Reconcile any pending/processing items that were in flight before this
       // page session started (e.g. server restarted, client reconnected).
       await this._reconcileQueue();
+      await this.checkLoadedModel();
     },
 
     // ----------------------------------------------------------------
@@ -199,8 +209,13 @@ function app() {
           const ids = active.map(i => i.item_id);
           // Merge without duplicating ids already present (e.g. from WS events
           // that arrived between page-load and this fetch completing).
+          // Also skip items that already finished THIS session (race-condition
+          // guard: queue_item_completed may have arrived while the fetch was in
+          // flight, so the server response can contain a stale "processing" row).
           const existingSet = new Set(this.queueItems);
-          const newIds = ids.filter(id => !existingSet.has(id));
+          const newIds = ids.filter(
+            id => !existingSet.has(id) && !this._finishedItemIds?.has(id)
+          );
           if (newIds.length > 0) {
             this.queueItems = [...this.queueItems, ...newIds];
             this.isGenerating = true;
@@ -242,10 +257,14 @@ function app() {
           allRealIds.push(...data.items.map(i => i.item_id));
         }
         // Replace all optimistic placeholders with the real IDs.
-        this.queueItems = [
-          ...this.queueItems.filter(id => !tempIds.includes(id)),
-          ...allRealIds,
-        ];
+        // Use a Set to prevent duplicates in case the ws-gallery-event for
+        // queue_item_enqueued arrived before this HTTP response (it would have
+        // already added the real ID while the optimistic placeholder was still
+        // present, causing a duplicate on the naive spread approach).
+        const withoutTemps = this.queueItems.filter(id => !tempIds.includes(id));
+        const merged = new Set(withoutTemps);
+        for (const id of allRealIds) merged.add(id);
+        this.queueItems = [...merged];
         this.isGenerating = true;
       } catch (err) {
         this.queueItems = this.queueItems.filter(id => !tempIds.includes(id));
@@ -324,6 +343,9 @@ function app() {
     // Shared cleanup: remove item from tracking and, when nothing is left in
     // flight, reset generating state and refresh the display.
     _onItemFinished(itemId) {
+      // Record as finished so _reconcileQueue won't re-add it if a stale server
+      // response races with this completion event.
+      this._finishedItemIds?.add(itemId);
       this.queueItems = this.queueItems.filter(id => id !== itemId);
       if (this.queueItems.length === 0) {
         this.isGenerating = false;
@@ -464,6 +486,8 @@ function app() {
         const data = await resp.json();
         this.queueDetails = data.items || [];
       } catch (e) {}
+      // Keep loaded-model indicator in sync while on the queue tab.
+      await this.checkLoadedModel();
     },
 
     async cancelQueueItem(itemId) {
@@ -509,6 +533,36 @@ function app() {
         this.selectImageFromEvent({ detail: { imageName } });
         window.dispatchEvent(new CustomEvent('select-image', { detail: { imageName } }));
       });
+    },
+
+    // ---- Model cache management ----
+
+    async checkLoadedModel() {
+      try {
+        const resp = await fetch('/api/v2/models/loaded');
+        if (resp.ok) {
+          const data = await resp.json();
+          this.loadedModelKey = data.loaded_key ?? null;
+        }
+      } catch (e) {}
+    },
+
+    async clearModelCache() {
+      if (this.clearingCache || this.isGenerating) return;
+      this.clearingCache = true;
+      try {
+        const resp = await fetch('/api/v2/models/unload_cache', { method: 'POST' });
+        if (resp.ok) {
+          this.loadedModelKey = null;
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          this._setError(`Could not unload model: ${err.detail || resp.statusText}`);
+        }
+      } catch (e) {
+        this._setError(`Could not unload model: ${e.message}`);
+      } finally {
+        this.clearingCache = false;
+      }
     },
 
     // ----------------------------------------------------------------

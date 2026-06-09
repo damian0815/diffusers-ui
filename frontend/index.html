@@ -181,9 +181,11 @@
             <div class="field">
               <label class="field-label">Sampler</label>
               <select x-model="sampler">
+                <option value="dpmpp">DPM++</option>
+                <option value="dpmpp_sde">DPM++ SDE</option>
                 <option value="dpmpp_2m">DPM++ 2M</option>
                 <option value="dpmpp_2m_sde">DPM++ 2M SDE</option>
-                <option value="dpmpp_sde">DPM++ SDE</option>
+                <option value="dpmpp_3m">DPM++ 3M</option>
                 <option value="euler">Euler</option>
                 <option value="euler_a">Euler A</option>
                 <option value="euler_flowmatch_dynshift">Euler FM DynShift</option>
@@ -514,11 +516,23 @@
                 x-show="queueDetails.filter(i=>i.status==='failed').length > 0"
                 x-text="`${queueDetails.filter(i=>i.status==='failed').length} failed`"></span>
         </div>
+        <span class="fs-subtitle loaded-model-label"
+              x-show="loadedModelKey"
+              x-text="`Loaded: ${models.find(m => m.key === loadedModelKey)?.name || loadedModelKey}`"
+              title="Model currently in memory"></span>
       </div>
       <div class="fs-header-actions">
         <button class="btn-secondary" @click="loadQueueDetails()" title="Refresh">↻ Refresh</button>
         <button class="btn-secondary" @click="pruneQueue()" title="Remove completed/failed rows">Prune done</button>
         <button class="btn-secondary danger" @click="clearQueue()" title="Cancel all pending">Clear pending</button>
+        <button class="btn-secondary"
+                @click="clearModelCache()"
+                :disabled="clearingCache || isGenerating"
+                :class="{'is-loading': clearingCache}"
+                x-show="loadedModelKey"
+                title="Unload the currently loaded model from memory / VRAM">
+          <span x-text="clearingCache ? '· · ·' : '🗑 Unload model'"></span>
+        </button>
       </div>
     </div>
 

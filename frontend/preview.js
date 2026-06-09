@@ -16,6 +16,7 @@ function connectPreview(onFrame) {
 
   let latestFrame = null;   // most recent parsed frame waiting to be rendered
   let rafPending  = false;  // true while a rAF callback is already scheduled
+  let isFirstConnect = true; // suppress ws-reconnected on the very first connect
 
   function scheduleRender() {
     if (rafPending) return;
@@ -31,6 +32,15 @@ function connectPreview(onFrame) {
 
   function connect() {
     const ws = new WebSocket(`${protocol}//${location.host}/ws/preview`);
+
+    ws.onopen = () => {
+      // Notify app.js so it can re-reconcile queue state after a dropout.
+      // Skipped on the very first connect — init() already calls _reconcileQueue().
+      if (!isFirstConnect) {
+        window.dispatchEvent(new CustomEvent('ws-reconnected'));
+      }
+      isFirstConnect = false;
+    };
 
     ws.onmessage = (event) => {
       try {

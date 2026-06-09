@@ -44,7 +44,8 @@ class PipelineLoader:
                 logging.info(f"Loading model {entry.name} from {entry.source} onto {settings.device} @{settings.dtype}")
                 self._pipeline = DiffusionPipeline.from_pretrained(
                     entry.source, **kwargs
-                ).to(device=settings.device)
+                ).to(device=settings.device, dtype=settings.dtype)
+                self._pipeline.vae = self._pipeline.vae.to(dtype=settings.vae_dtype)
                 _enable_fast_attention(self._pipeline)
             self._loaded_key = entry.key
         except Exception as exc:
@@ -103,6 +104,10 @@ class PipelineLoader:
 
         except Exception:
             logging.exception("Error during pipeline unload — VRAM may not be fully freed")
+
+    def unload(self) -> None:
+        """Public API: unload the current pipeline and free VRAM."""
+        self._unload()
 
     @property
     def loaded_key(self) -> str | None:
