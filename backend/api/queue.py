@@ -342,7 +342,7 @@ async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: 
     item = queue.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Queue item {item_id} not found")
-    new_item = QueueItem(params=item.params)
+    new_item = QueueItem(params=item.params, priority=prepend)
     await queue.enqueue(new_item, prepend=prepend)
 
     registry    = request.app.state.registry

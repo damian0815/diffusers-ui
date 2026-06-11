@@ -67,6 +67,7 @@ function gallery() {
         const resp = await fetch('/api/v1/boards/');
         if (!resp.ok) return;
         this.galleries = await resp.json();
+        this._notifyGalleriesUpdated();
         if (this.galleries.length > 0 && !this.selectedBoardId) {
           this.selectedBoardId = this.galleries[0].board_id;
           await this.loadMore();
@@ -416,6 +417,7 @@ function gallery() {
         if (resp.ok) {
           const g = await resp.json();
           this.galleries.push(g);
+          this._notifyGalleriesUpdated();
           this.selectedBoardId = g.board_id;
           this.resetAndLoad();
         }
@@ -428,3 +430,4 @@ function gallery() {
 document.addEventListener('alpine:init', () => {
   Alpine.data('gallery', gallery);
 });
+

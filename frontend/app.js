@@ -169,6 +169,11 @@ function app() {
         this._currentBoardId = e.detail.boardId;
       });
 
+      // Keep a local copy of the gallery list for the target-gallery picker.
+      window.addEventListener('galleries-updated', (e) => {
+        this._galleries = e.detail.galleries || [];
+      });
+
       // React to gallery reporting its first visible image.
       // The gallery fires this whenever its images array changes (board switch,
       // search, load, add, delete), so we always know what rule 3 should display.
@@ -232,7 +237,8 @@ function app() {
 
     async generate(prepend = false) {
       if (!this.modelKey) { this._setError('Please select a model first.'); return; }
-      if (!this._currentBoardId) { this._setError('No gallery selected — please wait for the gallery to load or create one on the right panel.'); return; }
+      const effectiveBoardId = this.targetBoardId || this._currentBoardId;
+      if (!effectiveBoardId) { this._setError('No gallery selected — please wait for the gallery to load or create one on the right panel.'); return; }
       if (this.isEnqueuing) return;
 
       this.isEnqueuing = true;
@@ -306,7 +312,7 @@ function app() {
           sampler: this.sampler,
           prediction_type: this.predictionType,
           model_key: this.modelKey,
-          board_id: this._currentBoardId,
+          board_id: this.targetBoardId || this._currentBoardId,
           count: this.batchCount,
         },
       };

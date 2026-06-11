@@ -87,7 +87,7 @@ class QueueManager:
             self._queue.appendleft(item)
         return True
 
-    async def next_pending_batch_window(self, window_s: float) -> list[QueueItem]:
+    async def next_pending_batch_window(self, window_s: float, limit: int=100) -> list[QueueItem]:
         """
         Wait until at least one pending item is available, then collect all
         items that arrive within ``window_s`` seconds.  Returns an empty list
@@ -104,7 +104,7 @@ class QueueManager:
         async with self._lock:
             self._new_item_event.clear()
             collected: list[QueueItem] = []
-            while self._queue:
+            while self._queue and len(collected) < limit:
                 item = self._queue.popleft()
                 if item.status == ItemStatus.PENDING:
                     collected.append(item)

@@ -48,11 +48,25 @@ def group_into_batches(
         seen.setdefault(key, []).append(item)
 
     result: list[list[QueueItem]] = []
+
+    # ── Priority items: each runs as its own solo batch (no grouping) ──────────
+    # They are placed first so they execute before any normal-priority work that
+    # was already in the window.
+    priority_result: list[list[QueueItem]] = []
+    normal_result: list[list[QueueItem]] = []
+
     for key, group in seen.items():
-        limit: int = max_size(key) if callable(max_size) else max_size
-        if limit > 0 and len(group) > limit:
-            for i in range(0, len(group), limit):
-                result.append(group[i : i + limit])
-        else:
-            result.append(group)
-    return result
+        # Split the group into priority singles and normal chunks
+        for item in group:
+            if item.priority:
+                priority_result.append([item])
+        normal_group = [item for item in group if not item.priority]
+        if normal_group:
+            limit: int = max_size(key) if callable(max_size) else max_size
+            if limit > 0 and len(normal_group) > limit:
+                for i in range(0, len(normal_group), limit):
+                    normal_result.append(normal_group[i : i + limit])
+            else:
+                normal_result.append(normal_group)
+
+    return priority_result + normal_result

@@ -71,6 +71,8 @@ class QueueItem:
     status: ItemStatus = ItemStatus.PENDING
     output_image_name: str | None = None
     error: str | None = None
+    # priority=True: item was enqueued to the front; skip batch window & run solo
+    priority: bool = False
 
 
 @dataclass

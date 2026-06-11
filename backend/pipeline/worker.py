@@ -118,7 +118,7 @@ class PipelineWorker:
         self._running = True
         while self._running:
             try:
-                items = await self._queue.next_pending_batch_window(settings.batch_window_s)
+                items = await self._queue.next_pending_batch_window(settings.batch_window_s, limit=2)
             except asyncio.CancelledError:
                 break
             if not items:
@@ -130,7 +130,7 @@ class PipelineWorker:
                     break
                 self._idle.clear()
                 try:
-                    await self._run_batch(batch)
+                    _ = await self._run_batch(batch)
                 except Exception:
                     logger.exception("Unhandled error in batch, continuing.")
                 finally:
@@ -150,8 +150,12 @@ class PipelineWorker:
         """True when no generation is currently in flight."""
         return self._idle.is_set()
 
-    async def _run_batch(self, batch: list[QueueItem]) -> None:
-        """Run a single batch: load model, generate, save, record."""
+    async def _run_batch(self, batch: list[QueueItem]) -> bool:
+        """Run a single batch: load model, generate, save, record.
+
+        Returns True if the batch ended in an OOM (items have been requeued /
+        failed by _handle_oom); False on success or non-OOM failure.
+        """
         entry = self._registry.get(batch[0].params.model_key)
         if entry is None:
             error_msg = f"Model key {batch[0].params.model_key!r} not found in registry (have: {[e.key for e in self._registry.all()]})"
@@ -162,7 +166,7 @@ class PipelineWorker:
                     {"item_id": item.item_id, "error": error_msg},
                 )
             logger.error(error_msg)
-            return
+            return False
 
         try:
             pipeline = await asyncio.to_thread(self._loader.load, entry)
@@ -174,7 +178,7 @@ class PipelineWorker:
                     {"item_id": item.item_id, "error": str(exc)},
                 )
             logger.error("Pipeline load failed: %s", exc)
-            return
+            return False
 
         # Swap scheduler based on sampler (not applicable to SANA — it uses its
         # own FlowMatchEulerDiscreteScheduler and we leave it untouched)
@@ -324,9 +328,12 @@ class PipelineWorker:
                 )
                 await self._record_in_gallery(item, image_name, entry.name)
 
+            return False  # success — no OOM
+
         except Exception as exc:
             if _is_oom(exc):
                 await self._handle_oom(batch, exc)
+                return True
             else:
                 logger.exception("Pipeline inference failed")
                 for item in batch:
@@ -336,6 +343,7 @@ class PipelineWorker:
                             "queue_item_failed",
                             {"item_id": item.item_id, "error": str(exc)},
                         )
+                return False
 
     async def _handle_oom(self, batch: list[QueueItem], exc: Exception) -> None:
         """
