@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.config import settings
 from backend.domain import _init_counter
 from backend.gallery.db import init_db, AsyncSessionLocal
+from backend.gallery.models import Gallery
 from backend.queue.manager import QueueManager
 from backend.queue.store import QueueStore
 from backend.model_registry.registry import ModelRegistry
@@ -48,6 +49,8 @@ async def lifespan(app: FastAPI):
 
     # Set up database (creates tables if they don't exist)
     await init_db()
+
+    await _cleanup_broken_images()
 
     # Create default gallery if none exist
     default_board_id = await _ensure_default_gallery()
@@ -135,6 +138,32 @@ async def _ensure_default_gallery() -> str:
         await session.commit()
         return gallery.board_id
 
+
+async def _cleanup_broken_images():
+    """ Remove all files that are not known to any galleries """
+    logger.warning("Cleaning up broken images...")
+    from backend.gallery.service import GalleryService
+    all_known_images = set()
+    async with AsyncSessionLocal() as session:
+        service = GalleryService(session)
+        galleries = await service.list_galleries()
+        for gallery in galleries:
+            gallery: Gallery
+            for image in await gallery.images:
+                all_known_images.add(image.image_name)
+
+        num_removed = 0
+        for image_name in list(settings.images_dir.glob('*.png')):
+            if not image_name.name in all_known_images:
+                logger.info(f"Removing broken image file: {image_name}")
+                try:
+                    #image_name.unlink()
+                    thumbnail_name = settings.thumbnails_dir / image_name
+                    #thumbnail_name.unlink()
+                    num_removed += 1
+                except Exception as e:
+                    logger.warning(f"Failed to remove broken image file {image_name}: {e}")
+        logger.info(f"Removed {num_removed} broken images out of {len(all_known_images)} total.")
 
 # ---------------------------------------------------------------------------
 # App construction

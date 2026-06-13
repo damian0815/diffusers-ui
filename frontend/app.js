@@ -175,11 +175,6 @@ function app() {
         this._galleries = e.detail.galleries || [];
       });
 
-      // Keep targetBoardId in sync with the gallery panel's selectedBoardId
-      window.addEventListener('board-changed', (e) => {
-        this.targetBoardId = e.detail.boardId;
-      });
-
       // React to gallery reporting its first visible image.
       // The gallery fires this whenever its images array changes (board switch,
       // search, load, add, delete), so we always know what rule 3 should display.
@@ -556,7 +551,9 @@ function app() {
           const data = await resp.json();
           this.loadedModelKey = data.loaded_key ?? null;
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error("failed to load model:", e)
+      }
     },
 
     async clearModelCache() {

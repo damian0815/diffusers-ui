@@ -82,11 +82,6 @@ async def delete_image(image_name: str, request: Request, session=Depends(get_se
         board_id = await service.delete_image(image_name)
     except ImageNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    for path in [settings.images_dir / image_name, settings.thumbnails_dir / image_name]:
-        try:
-            path.unlink(missing_ok=True)
-        except Exception:
-            pass
     await request.app.state.broadcaster.broadcast_event(
         "image_deleted", {"image_name": image_name, "board_id": board_id}
     )
@@ -125,7 +120,6 @@ async def remove_tag(image_name: str, tag_name: str, session=Depends(get_session
         raise HTTPException(status_code=404, detail=str(exc))
     return _image_record_to_dict(record)
 
-
 @router.get("/")
 async def list_images(
     board_id: str,
@@ -157,7 +151,6 @@ async def list_images(
         "limit": limit,
         "items": [_image_record_to_dict(r) for r in records],
     }
-
 
 def _image_record_to_dict(record) -> dict:
     return {

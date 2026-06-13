@@ -56,14 +56,15 @@ async def delete_board(
 ):
     """Delete a gallery, optionally including all its images."""
     service = GalleryService(session)
+    deleted_images = []
     try:
-        await service.delete_gallery(board_id, include_images=include_images)
+        deleted_images = await service.delete_gallery(board_id, include_images=include_images)
     except GalleryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     await request.app.state.broadcaster.broadcast_event(
         "board_deleted", {"board_id": board_id}
     )
-    return {"deleted": board_id}
+    return {"deleted": board_id, "deleted_images": deleted_images}
 
 
 def _gallery_to_dict(gallery, count: int=None) -> dict:

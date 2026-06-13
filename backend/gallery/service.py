@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.config import settings
 from backend.domain import QueueItem
 from backend.gallery.models import Gallery, ImageRecord, Tag
 
@@ -67,18 +68,22 @@ class GalleryService:
 
     async def delete_gallery(
         self, board_id: str, include_images: bool = False
-    ) -> None:
+    ) -> list[str]:
         gallery = await self.get_gallery(board_id)
         if gallery is None:
             raise GalleryNotFoundError(f"Gallery {board_id!r} not found")
+        deleted_images = []
         if include_images:
+            print(f"deleting images for gallery {gallery.id}")
             result = await self._session.execute(
                 select(ImageRecord).where(ImageRecord.gallery_id == gallery.id)
             )
             for img in result.scalars().all():
                 await self._session.delete(img)
+                deleted_images.append(img.image_name)
         await self._session.delete(gallery)
         await self._session.flush()
+        return deleted_images
 
     # ------------------------------------------------------------------
     # Images
@@ -230,7 +235,18 @@ class GalleryService:
             )
             g = result.scalar_one_or_none()
             board_id = g.board_id if g else None
+
         await self._session.delete(record)
+
+        for path in [
+            settings.images_dir / image_name,
+            settings.thumbnails_dir / image_name
+        ]:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
         await self._session.flush()
         return board_id
 
