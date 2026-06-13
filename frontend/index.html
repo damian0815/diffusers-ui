@@ -70,26 +70,36 @@
 
         <div class="panel-scroll">
 
-          <div class="row generate-row">
-            <button class="btn-primary"
-                    @click="generate(false)"
-                    :disabled="isEnqueuing || !modelKey"
-                    :class="{'is-loading': isEnqueuing}"
-                    title="Generate  ·  ⌘↩">
-              <span x-text="isEnqueuing ? '· · ·' : '▶ Generate'"></span>
-            </button>
-            <button class="icon-btn generate-priority" @click="generate(true)"
-                    :disabled="isEnqueuing"
-                    title="Front of queue  ·  ⌘⇧↩">⏫</button>
-            <div class="field batch-count-field" title="Number of images per prompt variant (seed auto-increments)">
-              <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
-                     style="width:56px;text-align:center" title="Batch count">
-            </div>
-            <span class="batch-hint-pill"
-                  x-show="_totalGenCount() > 1"
-                  x-text="`${_totalGenCount()} gens`"
-                  title="Total generations: prompt variants × batch count"></span>
-          </div>
+           <div class="row generate-row">
+             <button class="btn-primary"
+                     @click="generate(false)"
+                     :disabled="isEnqueuing || !modelKey"
+                     :class="{'is-loading': isEnqueuing}"
+                     title="Generate  ·  ⌘↩">
+               <span x-text="isEnqueuing ? '· · ·' : '▶ Generate'"></span>
+             </button>
+             <button class="icon-btn generate-priority" @click="generate(true)"
+                     :disabled="isEnqueuing"
+                     title="Front of queue  ·  ⌘⇧↩">⏫</button>
+             <div class="field batch-count-field" title="Number of images per prompt variant (seed auto-increments)">
+               <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
+                      style="width:56px;text-align:center" title="Batch count">
+             </div>
+             <span class="batch-hint-pill"
+                   x-show="_totalGenCount() > 1"
+                   x-text="`${_totalGenCount()} gens`"
+                   title="Total generations: prompt variants × batch count"></span>
+           </div>
+
+           <div class="field-group" style="margin-top:12px">
+             <label class="field-label">Target Gallery</label>
+             <select x-model="targetBoardId">
+               <option value="" disabled selected>Select a gallery...</option>
+               <template x-for="g in _galleries" :key="g.board_id">
+                 <option :value="g.board_id" x-text="g.board_name"></option>
+               </template>
+             </select>
+           </div>
 
           <div id="queue-status">
             <span x-text="queueItems.length > 0 ? `Queue: ${queueItems.length}` : 'Queue: idle'"></span>

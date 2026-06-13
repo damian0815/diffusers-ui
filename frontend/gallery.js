@@ -31,6 +31,10 @@ function gallery() {
       window.dispatchEvent(new CustomEvent('board-changed', {
         detail: { boardId: this.selectedBoardId },
       }));
+      // Also notify the app panel so its targetBoardId stays in sync
+      window.dispatchEvent(new CustomEvent('board-changed', {
+        detail: { boardId: this.selectedBoardId },
+      }));
     },
 
     async init() {

@@ -15,6 +15,7 @@ function app() {
     predictionType: 'default',
     modelKey: '',
     batchCount: 1,
+    targetBoardId: null,
 
     // ---- UI state ----
     activeTab: 'generate',
@@ -172,6 +173,11 @@ function app() {
       // Keep a local copy of the gallery list for the target-gallery picker.
       window.addEventListener('galleries-updated', (e) => {
         this._galleries = e.detail.galleries || [];
+      });
+
+      // Keep targetBoardId in sync with the gallery panel's selectedBoardId
+      window.addEventListener('board-changed', (e) => {
+        this.targetBoardId = e.detail.boardId;
       });
 
       // React to gallery reporting its first visible image.
