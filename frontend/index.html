@@ -462,27 +462,38 @@
 
       <!-- ── Move modal ── -->
       <div class="modal-backdrop"
+           style="display: none;"
            x-show="moveModal.open"
-           x-transition
+           x-transition.opacity
            @click.self="closeMoveModal()">
-        <div class="modal-box">
+        <div class="modal-box"
+             x-show="moveModal.open"
+             x-transition>
+
           <div class="modal-header">
             <span class="modal-title"
                   x-text="`Move ${selectedImageNames.length} image${selectedImageNames.length !== 1 ? 's' : ''} to…`"></span>
-            <button class="info-close-btn" @click="closeMoveModal()">×</button>
+            <button class="info-close-btn" @click="closeMoveModal()">&times;</button>
           </div>
+
           <div class="modal-body">
-            <template x-for="g in galleries.filter(g => g.board_id !== selectedBoardId)" :key="g.board_id">
-              <label class="modal-radio-row">
-                <input type="radio" x-model="moveModal.targetBoardId" :value="g.board_id">
-                <span x-text="g.board_name"></span>
-              </label>
-            </template>
+            <!-- Dropdown Select inside a conditional wrapper -->
+            <div x-show="galleries.filter(g => g.board_id !== selectedBoardId).length > 0">
+              <select class="modal-select" x-model="moveModal.targetBoardId">
+                <option value="" disabled selected>Select destination gallery...</option>
+                <template x-for="g in galleries.filter(g => g.board_id !== selectedBoardId)" :key="g.board_id">
+                  <option :value="g.board_id" x-text="g.board_name"></option>
+                </template>
+              </select>
+            </div>
+
+            <!-- Fallback when no other galleries exist -->
             <p x-show="galleries.filter(g => g.board_id !== selectedBoardId).length === 0"
-               class="hint" style="padding:8px 0">
+               class="hint">
               No other galleries. Create one first (+).
             </p>
           </div>
+
           <div class="modal-footer">
             <button class="btn-secondary" @click="closeMoveModal()">Cancel</button>
             <button class="btn-primary"
@@ -491,9 +502,9 @@
               <span x-text="_moving ? 'Moving…' : 'Move'"></span>
             </button>
           </div>
+
         </div>
       </div>
-
     </aside>
 
   </div><!-- /#layout -->

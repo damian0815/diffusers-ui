@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.gallery.db import get_session
@@ -7,13 +9,17 @@ from backend.gallery.service import GalleryService, GalleryNotFoundError
 
 router = APIRouter(prefix="/api/v1/boards", tags=["boards"])
 
+logger = logging.getLogger(__name__)
 
 @router.get("/")
 async def list_boards(session=Depends(get_session)):
     """Return all galleries (boards)."""
     service = GalleryService(session)
     galleries = await service.list_galleries()
-    return [_gallery_to_dict(g) for g in galleries]
+    dicts = [_gallery_to_dict(g, count=await service.count_images_in_gallery(g.board_id))
+             for g in galleries]
+    #logger.warning(f"list_boards() returning dicts: {dicts}")
+    return dicts
 
 
 @router.post("/")
@@ -60,9 +66,9 @@ async def delete_board(
     return {"deleted": board_id}
 
 
-def _gallery_to_dict(gallery) -> dict:
+def _gallery_to_dict(gallery, count: int=None) -> dict:
     return {
         "board_id": gallery.board_id,
         "board_name": gallery.name,
         "created_at": gallery.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if gallery.created_at else None,
-    }
+    } | ({ "image_count": count } if count is not None else {})

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from PIL import Image as PILImage
 import diffusers
+from diffusers import SanaPAGPipeline
 
 from backend.config import settings
 from backend.domain import QueueItem, ItemStatus
@@ -301,15 +302,20 @@ class PipelineWorker:
                         width=params.width,
                         height=params.height,
                         num_inference_steps=params.steps,
-                        guidance_scale=params.cfg,
                         generator=generators,
                         callback_on_step_end=on_step,
                         callback_on_step_end_tensor_inputs=["latents"],
                     )
-                    if not is_sana:
-                        # guidance_rescale is an SD1/SDXL concept;
-                        # SanaPipeline doesn't accept this argument.
-                        call_kwargs['guidance_rescale'] = params.cfg_rescale_multiplier
+                    if type(pipeline) is SanaPAGPipeline:
+                        call_kwargs['guidance_scale'] = 0
+                        call_kwargs['pag_scale'] = params.cfg
+                        call_kwargs['pag_adaptive_scale'] = params.cfg_rescale_multiplier
+                    else:
+                        call_kwargs['guidance_scale'] = params.cfg
+                        if not is_sana:
+                            # guidance_rescale is an SD1/SDXL concept;
+                            # SanaPipeline doesn't accept this argument.
+                            call_kwargs['guidance_rescale'] = params.cfg_rescale_multiplier
                     return pipeline(**call_kwargs)
 
             result = await asyncio.to_thread(_run_pipeline)

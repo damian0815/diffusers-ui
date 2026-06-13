@@ -3,6 +3,8 @@ from __future__ import annotations
 import gc
 import logging
 
+from diffusers import SanaPAGPipeline
+
 from backend.config import settings
 from backend.domain import ModelEntry
 

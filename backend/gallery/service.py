@@ -34,6 +34,16 @@ class GalleryService:
         result = await self._session.execute(select(Gallery).order_by(Gallery.created_at))
         return list(result.scalars().all())
 
+    async def count_images_in_gallery(self, board_id: str) -> int:
+        gallery = await self.get_gallery(board_id)
+        if gallery is None:
+            return 0
+        result = await self._session.execute(
+            select(func.count()).select_from(ImageRecord)
+            .where(ImageRecord.gallery_id == gallery.id)
+        )
+        return result.scalar_one()
+
     async def get_gallery(self, board_id: str) -> Gallery | None:
         result = await self._session.execute(
             select(Gallery).where(Gallery.board_id == board_id)
