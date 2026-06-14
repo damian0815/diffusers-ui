@@ -142,28 +142,24 @@ async def _ensure_default_gallery() -> str:
 async def _cleanup_broken_images():
     """ Remove all files that are not known to any galleries """
     logger.warning("Cleaning up broken images...")
-    from backend.gallery.service import GalleryService
-    all_known_images = set()
+    from sqlalchemy import select
+    from backend.gallery.models import ImageRecord
     async with AsyncSessionLocal() as session:
-        service = GalleryService(session)
-        galleries = await service.list_galleries()
-        for gallery in galleries:
-            gallery: Gallery
-            for image in await gallery.images:
-                all_known_images.add(image.image_name)
+        result = await session.execute(select(ImageRecord.image_name))
+        all_known_images = {row[0] for row in result.all()}
 
         num_removed = 0
-        for image_name in list(settings.images_dir.glob('*.png')):
-            if not image_name.name in all_known_images:
-                logger.info(f"Removing broken image file: {image_name}")
+        for image_path in list(settings.images_dir.glob('*.png')):
+            if image_path.name not in all_known_images:
+                logger.warning(f"Removing broken image file: {image_path}")
                 try:
-                    #image_name.unlink()
-                    thumbnail_name = settings.thumbnails_dir / image_name
-                    #thumbnail_name.unlink()
+                    image_path.unlink()
+                    thumbnail_path = settings.thumbnails_dir / image_path.name
+                    thumbnail_path.unlink()
                     num_removed += 1
                 except Exception as e:
-                    logger.warning(f"Failed to remove broken image file {image_name}: {e}")
-        logger.info(f"Removed {num_removed} broken images out of {len(all_known_images)} total.")
+                    logger.warning(f"Failed to remove broken image file {image_path}: {e}")
+        logger.warning(f"Removed {num_removed} broken images out of {len(all_known_images)} total.")
 
 # ---------------------------------------------------------------------------
 # App construction
