@@ -21,11 +21,20 @@ function gallery() {
     _lastClickIdx: null,      // anchor for shift-range
     _moving: false,
 
+    // ── Navigation state ─────────────────────────────────────────────────
+    _isNavigating: false,     // true while jumping to a specific offset/image
+
     // ── Context menu ─────────────────────────────────────────────────────
     ctxMenu: { open: false, x: 0, y: 0 },
 
     // ── Move modal ───────────────────────────────────────────────────────
     moveModal: { open: false, targetBoardId: null },
+
+    _notifyGalleriesUpdated() {
+      window.dispatchEvent(new CustomEvent('galleries-updated', {
+        detail: { galleries: this.galleries },
+      }));
+    },
 
     _notifyBoardChanged() {
       window.dispatchEvent(new CustomEvent('board-changed', {
@@ -54,6 +63,72 @@ function gallery() {
         window.dispatchEvent(new CustomEvent('gallery-first-image-changed', {
           detail: { imageName: imgs[0]?.image_name ?? null },
         }));
+      });
+
+      // Navigate to a specific gallery and select an image (from info overlay).
+      // Loads pages until the target image is found, then assigns all at once
+      // so partial thumbnails are never rendered mid-search.
+      window.addEventListener('navigate-board', async (e) => {
+        const { boardId, imageName } = e.detail;
+        if (!boardId || !imageName) return;
+        this._isNavigating = true;
+        this.selectedBoardId = boardId;
+        this.$dispatch('select-image', { imageName: null });
+        this.selectedImageName = null;
+        this._clearSelection();
+        this.images = [];
+        this.offset = 0;
+        this.total = 0;
+        this.hasMore = true;
+
+        const temp = [];
+        let loadOff = 0;
+        let found = false;
+        while (!found) {
+          try {
+            const params = new URLSearchParams({
+              board_id: boardId, offset: loadOff, limit: this.limit,
+            });
+            if (this.search) params.set('search', this.search);
+            if (this.starredOnly) params.set('starred_only', 'true');
+            const resp = await fetch(`/api/v1/images/?${params}`);
+            if (!resp.ok) break;
+            const data = await resp.json();
+            this.total = data.total;
+            const batch = data.items;
+            temp.push(...batch);
+
+            const localIdx = batch.findIndex(i => i.image_name === imageName);
+            if (localIdx !== -1) {
+              found = true;
+              this.images = temp;
+              this.offset = loadOff + batch.length;
+              this.hasMore = batch.length === this.limit;
+              const globalIdx = loadOff + localIdx;
+              this.selectImage(imageName, globalIdx);
+              this.$nextTick(() => {
+                document.querySelectorAll('.thumb-wrapper')[globalIdx]
+                  ?.scrollIntoView({ block: 'nearest' });
+              });
+              break;
+            }
+            loadOff += batch.length;
+            if (batch.length < this.limit) break;
+          } catch (_) { break; }
+        }
+        if (!found) {
+          if (temp.length > 0) {
+            this.images = temp.slice(0, this.limit);
+            this.offset = this.limit;
+            this.hasMore = temp.length === this.limit;
+          } else {
+            this.images = [];
+            this.offset = 0;
+            this.hasMore = true;
+            await this.loadMore();
+          }
+        }
+        this._isNavigating = false;
       });
 
       // Close context menu on any outside click; Escape closes both menu + modal
@@ -104,8 +179,40 @@ function gallery() {
       this._lastClickIdx = null;
     },
 
+    // ── Gallery position navigation ──────────────────────────────────────
+
+    async jumpToOffset(offset) {
+      if (this.loading || this._isNavigating) return;
+      this._isNavigating = true;
+      this.images = [];
+      this.offset = Math.max(0, Math.min(offset, Math.max(0, this.total - 1)));
+      this.hasMore = true;
+      this.loading = false;
+      await this.loadMore();
+      document.getElementById('gallery-contents')?.scrollTo(0, 0);
+      this._isNavigating = false;
+    },
+
+    jumpBy(delta) {
+      const current = Math.max(0, this.offset - this.limit);
+      const target = Math.max(0, Math.floor((current + delta) / this.limit) * this.limit);
+      this.jumpToOffset(target);
+    },
+
+    jumpToStart() { this.jumpToOffset(0); },
+
+    jumpToEnd() {
+      const last = Math.max(0, Math.floor((this.total - 1) / this.limit) * this.limit);
+      this.jumpToOffset(last);
+    },
+
+    jumpToMid() {
+      const mid = Math.max(0, Math.floor(this.total / 2 / this.limit) * this.limit);
+      this.jumpToOffset(mid);
+    },
+
     async loadMore() {
-      if (this.loading || !this.hasMore || !this.selectedBoardId) return;
+      if (this.loading || !this.hasMore || !this.selectedBoardId || this._isNavigating) return;
       this.loading = true;
       try {
         const params = new URLSearchParams({

@@ -74,6 +74,17 @@ async def get_image_metadata(image_name: str, session=Depends(get_session)):
     return _image_record_to_dict(record)
 
 
+@router.get("/i/{image_name}/gallery")
+async def get_image_gallery(image_name: str, session=Depends(get_session)):
+    """Return the gallery (board) info for an image."""
+    service = GalleryService(session)
+    record = await service.get_image_with_gallery(image_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Image {image_name!r} not found")
+    gallery = record.gallery
+    return {"board_id": gallery.board_id if gallery else None, "board_name": gallery.name if gallery else None}
+
+
 @router.delete("/i/{image_name}")
 async def delete_image(image_name: str, request: Request, session=Depends(get_session)):
     """Delete an image record and its files from disk."""

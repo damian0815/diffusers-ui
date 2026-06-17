@@ -255,7 +255,7 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
             model_key=batch.model_key,
             board_id=batch.board_id,
         )
-        item = QueueItem(params=params)
+        item = QueueItem(params=params, priority=prepend)
         await queue.enqueue(item, prepend=prepend)
 
         item_dict = _queue_item_to_image_dict(item, model_name)

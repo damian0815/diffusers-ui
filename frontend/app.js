@@ -16,6 +16,7 @@ function app() {
     modelKey: '',
     batchCount: 1,
     targetBoardId: null,
+    _galleries: [],
 
     // ---- UI state ----
     activeTab: 'generate',
@@ -74,6 +75,10 @@ function app() {
       { v: '2:3',  rw: 2,  rh: 3  },
       { v: '9:16', rw: 9,  rh: 16 },
     ],
+
+    // idk
+    loadedModelKey: null,
+    clearingCache: false,
 
     async init() {
       Layout.init();
@@ -463,8 +468,19 @@ function app() {
 
     async _loadImageMeta(imageName) {
       try {
-        const resp = await fetch(`/api/v1/images/i/${imageName}/metadata`);
-        if (resp.ok) this.selectedImageMeta = await resp.json();
+        const [metaResp, galleryResp] = await Promise.all([
+          fetch(`/api/v1/images/i/${imageName}/metadata`),
+          fetch(`/api/v1/images/i/${imageName}/gallery`),
+        ]);
+        if (metaResp.ok) {
+          const meta = await metaResp.json();
+          if (galleryResp.ok) {
+            const gallery = await galleryResp.json();
+            meta.board_id = gallery.board_id;
+            meta.board_name = gallery.board_name;
+          }
+          this.selectedImageMeta = meta;
+        }
       } catch (e) {}
     },
 
@@ -795,6 +811,18 @@ function app() {
     },
 
     _roundTo64(n) { return Math.max(256, Math.round(n / 64) * 64); },
+
+    // ----------------------------------------------------------------
+    // Gallery navigation
+    // ----------------------------------------------------------------
+
+    navigateToGallery(boardId, imageName) {
+      if (!boardId) return;
+      this.activeTab = 'generate';
+      window.dispatchEvent(new CustomEvent('navigate-board', {
+        detail: { boardId, imageName },
+      }));
+    },
 
     // ----------------------------------------------------------------
     // Keyboard shortcuts

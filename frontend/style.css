@@ -667,6 +667,41 @@ select option { background: var(--surface); }
   color: var(--text-3);
 }
 
+.gallery-nav-row {
+  display: flex; align-items: center; gap: 3px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.gallery-nav-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: background 0.1s, color 0.1s;
+}
+.gallery-nav-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.gallery-nav-btn:active {
+  background: var(--accent-bg);
+  border-color: var(--accent-dim);
+}
+.gallery-nav-pos {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 0 4px;
+  white-space: nowrap;
+  min-width: 70px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 #gallery-contents {
   flex: 1;
   overflow-y: auto; overflow-x: hidden;
@@ -731,6 +766,56 @@ select option { background: var(--surface); }
 .thumb-wrapper[dragover] { border-color: var(--accent) !important; }
 
 #gallery-sentinel { height: 20px; }
+
+/* ── Context menu (right-click) ────────────────────────── */
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r);
+  padding: 4px 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(129,140,248,0.06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.ctx-header {
+  padding: 6px 12px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 7px 14px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  font-family: inherit;
+}
+.ctx-item:hover {
+  background: var(--accent-bg);
+  color: var(--accent-hi);
+}
+.ctx-item.danger:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
+}
 
 /* ── App nav bar ────────────────────────────────────────── */
 #app-nav {

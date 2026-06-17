@@ -129,6 +129,14 @@ class GalleryService:
         )
         return result.scalar_one_or_none()
 
+    async def get_image_with_gallery(self, image_name: str) -> ImageRecord | None:
+        result = await self._session.execute(
+            select(ImageRecord)
+            .where(ImageRecord.image_name == image_name)
+            .options(selectinload(ImageRecord.gallery), selectinload(ImageRecord.tags))
+        )
+        return result.scalar_one_or_none()
+
     async def count_images(
         self,
         board_id: str,

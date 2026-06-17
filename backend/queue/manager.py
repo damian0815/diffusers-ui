@@ -41,7 +41,12 @@ class QueueManager:
         """Add an item to the queue. prepend=True puts it at the front."""
         async with self._lock:
             if prepend:
+                # Insert after existing priority items so priority items
+                # are processed in FIFO order among themselves.
+                n = sum(1 for it in self._queue if it.priority)
+                self._queue.rotate(-n)
                 self._queue.appendleft(item)
+                self._queue.rotate(n)
             else:
                 self._queue.append(item)
             self._all_items[item.item_id] = item

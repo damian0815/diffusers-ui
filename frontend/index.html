@@ -278,6 +278,15 @@
           </div>
 
           <div class="info-row">
+            <button class="info-adopt-btn" @click="navigateToGallery(selectedImageMeta?.board_id, selectedImageMeta?.image_name)" title="Show in gallery">↗</button>
+            <div class="info-field">
+              <span class="info-label">Gallery</span>
+              <span class="info-value"
+                    x-text="_galleries.find(g => g.board_id === selectedImageMeta?.board_id)?.board_name || selectedImageMeta?.board_name || '—'">
+              </span>
+            </div>
+          </div>
+          <div class="info-row">
             <button class="info-adopt-btn" @click="adoptField('prompt')" title="Use prompt">↩</button>
             <div class="info-field">
               <span class="info-label">Prompt</span>
@@ -408,6 +417,18 @@
             <span class="cols-value" x-text="thumbsPerRow"></span>
             <button class="icon-btn sm" @click="thumbsPerRow = Math.min(8, thumbsPerRow + 1)">+</button>
             <span class="gallery-total" x-show="total > 0" x-text="`${total} images`"></span>
+          </div>
+
+          <div class="gallery-nav-row" x-show="total > 0">
+            <button class="gallery-nav-btn" @click="jumpToStart()" title="Start">⏮</button>
+            <button class="gallery-nav-btn" @click="jumpBy(-500)" title="-500 images">−500</button>
+            <button class="gallery-nav-btn" @click="jumpBy(-100)" title="-100 images">−100</button>
+            <span class="gallery-nav-pos"
+                  x-text="`${Math.max(0, offset - limit)} / ${total}`"></span>
+            <button class="gallery-nav-btn" @click="jumpBy(100)" title="+100 images">+100</button>
+            <button class="gallery-nav-btn" @click="jumpBy(500)" title="+500 images">+500</button>
+            <button class="gallery-nav-btn" @click="jumpToMid()" title="Middle">⟐</button>
+            <button class="gallery-nav-btn" @click="jumpToEnd()" title="End">⏭</button>
           </div>
         </div>
 
