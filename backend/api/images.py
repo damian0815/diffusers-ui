@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from PIL import Image as PILImage
 from pydantic import BaseModel
 
 from backend.config import settings
@@ -162,6 +165,21 @@ async def list_images(
         "limit": limit,
         "items": [_image_record_to_dict(r) for r in records],
     }
+
+@router.post("/upload-source")
+async def upload_source_image(file: UploadFile = File(...)):
+    """Accept an uploaded image for img2img; save and return its metadata."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    image_bytes = await file.read()
+    name = f"{uuid.uuid4().hex}.png"
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    out_path = settings.images_dir / name
+    pil_image = PILImage.open(BytesIO(image_bytes))
+    pil_image.save(out_path)
+    width, height = pil_image.size
+    return {"image_name": name, "width": width, "height": height}
+
 
 def _image_record_to_dict(record) -> dict:
     return {

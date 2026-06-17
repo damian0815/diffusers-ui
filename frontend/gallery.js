@@ -15,6 +15,7 @@ function gallery() {
     selectedImageName: null,
     thumbsPerRow: 3,
     _dragSrcIdx: null,
+    _pendingRestore: false,
 
     // ── Multi-select ─────────────────────────────────────────────────────
     selectedImageNames: [],   // all highlighted thumbnails
@@ -49,7 +50,11 @@ function gallery() {
     async init() {
       await this.loadGalleries();
       this._notifyBoardChanged();
-      this.$watch('selectedBoardId', () => this._notifyBoardChanged());
+      this.$watch('selectedBoardId', (newVal, oldVal) => {
+        this._notifyBoardChanged();
+        this._saveGalleryState(oldVal);
+      });
+      this.$watch('selectedImageName', () => this._saveGalleryState(this.selectedBoardId));
 
       this.setupInfiniteScroll();
       this.setupArrowNav();
@@ -149,6 +154,7 @@ function gallery() {
         this._notifyGalleriesUpdated();
         if (this.galleries.length > 0 && !this.selectedBoardId) {
           this.selectedBoardId = this.galleries[0].board_id;
+          this._pendingRestore = true;
           await this.loadMore();
         }
       } catch (e) {}
@@ -158,6 +164,7 @@ function gallery() {
       this.$dispatch('select-image', { imageName: null });
       this.selectedImageName = null;
       this._clearSelection();
+      this._pendingRestore = true;
       this.resetAndLoad();
     },
 
@@ -171,7 +178,41 @@ function gallery() {
       this.$dispatch('select-image', { imageName: null });
       this.selectedImageName = null;
       this._clearSelection();
+      this._pendingRestore = true;
       this.resetAndLoad();
+    },
+
+    _galleryStateKey(boardId) {
+      return `gallery-state:${boardId}`;
+    },
+
+    _saveGalleryState(boardId) {
+      if (!boardId) return;
+      try {
+        const state = { selectedImageName: this.selectedImageName };
+        localStorage.setItem(this._galleryStateKey(boardId), JSON.stringify(state));
+      } catch (_) {}
+    },
+
+    _loadGalleryState(boardId) {
+      if (!boardId) return null;
+      try {
+        const raw = localStorage.getItem(this._galleryStateKey(boardId));
+        return raw ? JSON.parse(raw) : null;
+      } catch (_) { return null; }
+    },
+
+    _restoreGalleryState() {
+      const state = this._loadGalleryState(this.selectedBoardId);
+      if (!state || !state.selectedImageName) return;
+      const idx = this.images.findIndex(i => i.image_name === state.selectedImageName);
+      if (idx !== -1) {
+        this.selectImage(state.selectedImageName, idx);
+        this.$nextTick(() => {
+          document.querySelectorAll('.thumb-wrapper')[idx]
+            ?.scrollIntoView({ block: 'nearest' });
+        });
+      }
     },
 
     _clearSelection() {
@@ -231,6 +272,10 @@ function gallery() {
       } catch (e) {
       } finally {
         this.loading = false;
+        if (this._pendingRestore) {
+          this._pendingRestore = false;
+          this._restoreGalleryState();
+        }
       }
     },
 
@@ -438,6 +483,27 @@ function gallery() {
       } finally {
         this._moving = false;
       }
+    },
+
+    // ── Img2img source ───────────────────────────────────────────────────
+
+    async useAsImg2imgSource() {
+      const name = this.selectedImageNames[0];
+      if (!name) return;
+      this.ctxMenu.open = false;
+      try {
+        const resp = await fetch(`/api/v1/images/i/${name}/metadata`);
+        if (!resp.ok) return;
+        const meta = await resp.json();
+        window.dispatchEvent(new CustomEvent('set-source-image', {
+          detail: {
+            name,
+            url: `/api/v1/images/i/${name}/full`,
+            width: meta.width,
+            height: meta.height,
+          },
+        }));
+      } catch (_) {}
     },
 
     // ── Drag-and-drop reordering ─────────────────────────────────────────

@@ -23,6 +23,8 @@ class ImageGenerationParams:
     model_key: str               # key into models.json
     board_id: str | None = None  # target
     prediction_type: str = 'default'  # 'default' = don't override; else e.g. 'epsilon', 'v_prediction', 'flow_prediction'
+    init_image: str | None = None   # image_name from gallery, or uploaded filename
+    strength: float = 0.75          # 0.0–1.0 how much noise to add
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class CriticalParams:
     sampler: str
     model_key: str
     prediction_type: str = 'default'
+    init_image: str | None = None
 
 
 class ItemStatus(str, Enum):
@@ -103,6 +106,8 @@ def make_params(**overrides) -> ImageGenerationParams:
         cfg_rescale_multiplier=0.0,
         sampler="euler_a",
         model_key="test_model",
+        init_image=None,
+        strength=0.75,
     )
     return ImageGenerationParams(**{**defaults, **overrides})
 

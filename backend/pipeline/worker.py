@@ -306,13 +306,22 @@ class PipelineWorker:
                         callback_on_step_end=on_step,
                         callback_on_step_end_tensor_inputs=["latents"],
                     )
+                    if params.init_image and not is_sana:
+                        import PIL.Image as PILImage_
+                        init_path = settings.images_dir / params.init_image
+                        init_pil = PILImage_.open(init_path).convert("RGB")
+                        call_kwargs['image'] = init_pil
+                        call_kwargs['strength'] = params.strength
                     if type(pipeline) is SanaPAGPipeline:
                         call_kwargs['guidance_scale'] = 0
                         call_kwargs['pag_scale'] = params.cfg
                         call_kwargs['pag_adaptive_scale'] = params.cfg_rescale_multiplier
                     else:
                         call_kwargs['guidance_scale'] = params.cfg
-                        if not is_sana:
+                        if is_sana:
+                            #call_kwargs['complex_human_instruction'] = []
+                            pass
+                        else:
                             # guidance_rescale is an SD1/SDXL concept;
                             # SanaPipeline doesn't accept this argument.
                             call_kwargs['guidance_rescale'] = params.cfg_rescale_multiplier

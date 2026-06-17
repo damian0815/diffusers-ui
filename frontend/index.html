@@ -91,8 +91,32 @@
                    title="Total generations: prompt variants × batch count"></span>
            </div>
 
+           <!-- Img2img source -->
+           <div class="field-group" x-show="sourceImage" style="margin-top:8px">
+             <div class="img2img-row">
+               <div class="img2img-thumb">
+                 <img :src="sourceImage.url">
+               </div>
+               <div class="img2img-controls">
+                 <button class="icon-btn sm" @click="clearSourceImage()" title="Remove">✕</button>
+                 <div class="field">
+                   <label class="field-label">Strength</label>
+                   <div class="img2img-strength-row">
+                     <input type="range" x-model.number="sourceStrength" min="0" max="1" step="0.05">
+                     <span class="img2img-val" x-text="sourceStrength.toFixed(2)"></span>
+                   </div>
+                 </div>
+               </div>
+             </div>
+           </div>
+           <div class="img2img-upload" x-show="!sourceImage">
+             <button class="btn-secondary" @click="uploadSourceImage()">
+               📷 Set source image…
+             </button>
+           </div>
+
            <div class="field-group" style="margin-top:12px">
-             <label class="field-label">Target Gallery</label>
+              <label class="field-label">Target Gallery</label>
              <select x-model="targetBoardId">
                <option value="" disabled selected>Select a gallery...</option>
                <template x-for="g in _galleries" :key="g.board_id">
@@ -485,6 +509,9 @@
              x-show="selectedImageNames.length > 1"
              x-text="`${selectedImageNames.length} images selected`"></div>
         <button class="ctx-item" @click="openMoveModal()">Move to gallery…</button>
+        <button class="ctx-item" @click="useAsImg2imgSource()">
+          Use as img2img input
+        </button>
         <div class="ctx-sep"></div>
         <button class="ctx-item danger" @click="deleteSelected()">
           Delete<template x-if="selectedImageNames.length > 1"><span x-text="` ${selectedImageNames.length} images`"></span></template>

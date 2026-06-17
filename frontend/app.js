@@ -55,6 +55,10 @@ function app() {
     modelEditName: '',
     autoSelectLatest: true,
 
+    // ---- Img2img state ----
+    sourceImage: null,          // null | {name, url, width, height}
+    sourceStrength: 0.75,
+
     // ---- Preview & aspect-ratio state ----
     showPreview: true,
     showInfoOverlay: false,
@@ -117,6 +121,15 @@ function app() {
           this._updatingAR = false;
         }
         this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
+      });
+
+      // Restore persisted local scan path
+      try {
+        const saved = localStorage.getItem('localScanPath');
+        if (saved) this.localScanPath = saved;
+      } catch (_) {}
+      this.$watch('localScanPath', (val) => {
+        try { localStorage.setItem('localScanPath', val); } catch (_) {}
       });
 
       // Keep the browser tab title in sync with pending job count.
@@ -192,6 +205,17 @@ function app() {
       // so we pick up anything that happened while the connection was down.
       window.addEventListener('ws-reconnected', () => {
         this._reconcileQueue();
+      });
+
+      // Img2img: receive source image from gallery context menu
+      window.addEventListener('set-source-image', (e) => {
+        const { name, url, width, height } = e.detail;
+        this.sourceImage = { name, url, width, height };
+        this.width = width;
+        this.height = height;
+        this.lockAspectRatio = true;
+        this._aspectRatioValue = width / height;
+        this.selectedAspectRatio = this._detectAspectRatio(width, height);
       });
 
       // Reconcile any pending/processing items that were in flight before this
@@ -307,21 +331,23 @@ function app() {
     },
 
     _buildEnqueueBody(prepend, promptOverride = null) {
-      return {
-        prepend,
-        batch: {
-          prompt: promptOverride ?? this.prompt,
-          negative_prompt: this.negativePrompt,
-          seed: this.seed, width: this.width, height: this.height,
-          steps: this.steps, cfg: this.cfg,
-          cfg_rescale_multiplier: this.cfgRescale,
-          sampler: this.sampler,
-          prediction_type: this.predictionType,
-          model_key: this.modelKey,
-          board_id: this.targetBoardId || this._currentBoardId,
-          count: this.batchCount,
-        },
+      const batch = {
+        prompt: promptOverride ?? this.prompt,
+        negative_prompt: this.negativePrompt,
+        seed: this.seed, width: this.width, height: this.height,
+        steps: this.steps, cfg: this.cfg,
+        cfg_rescale_multiplier: this.cfgRescale,
+        sampler: this.sampler,
+        prediction_type: this.predictionType,
+        model_key: this.modelKey,
+        board_id: this.targetBoardId || this._currentBoardId,
+        count: this.batchCount,
       };
+      if (this.sourceImage) {
+        batch.init_image = this.sourceImage.name;
+        batch.strength = this.sourceStrength;
+      }
+      return { prepend, batch };
     },
 
     async _pollItem(itemId) {
@@ -366,6 +392,56 @@ function app() {
         this._currentDisplayName = null;
         this._refreshDisplay();
       }
+    },
+
+    // ----------------------------------------------------------------
+    // Img2img
+    // ----------------------------------------------------------------
+
+    async uploadSourceImage() {
+      return new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          if (!file) return resolve();
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const resp = await fetch('/api/v1/images/upload-source', {
+              method: 'POST',
+              body: formData,
+            });
+            if (!resp.ok) { this._setError('Upload failed'); return resolve(); }
+            const data = await resp.json();
+            this.sourceImage = {
+              name: data.image_name,
+              url: `/api/v1/images/i/${data.image_name}/full`,
+              width: data.width,
+              height: data.height,
+            };
+            this.width = data.width;
+            this.height = data.height;
+            this.lockAspectRatio = true;
+            this._aspectRatioValue = data.width / data.height;
+            this.selectedAspectRatio = this._detectAspectRatio(data.width, data.height);
+          } catch (e) {
+            this._setError('Upload failed');
+          }
+          resolve();
+        };
+        input.click();
+      });
+    },
+
+    clearSourceImage() {
+      this.sourceImage = null;
+      this.lockAspectRatio = false;
+      this._aspectRatioValue = null;
+      this.selectedAspectRatio = 'custom';
+      this.width = 512;
+      this.height = 512;
     },
 
     // ----------------------------------------------------------------

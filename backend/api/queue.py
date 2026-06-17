@@ -28,6 +28,8 @@ class BatchParams(BaseModel):
     model_key: str
     board_id: str  # target gallery board; None = worker default
     count: int = 1  # number of items to enqueue; seed is auto-incremented for each
+    init_image: str | None = None
+    strength: float = 0.75
 
 
 class EnqueueRequest(BaseModel):
@@ -254,6 +256,8 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
             prediction_type=batch.prediction_type,
             model_key=batch.model_key,
             board_id=batch.board_id,
+            init_image=batch.init_image,
+            strength=batch.strength,
         )
         item = QueueItem(params=params, priority=prepend)
         await queue.enqueue(item, prepend=prepend)
