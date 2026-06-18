@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import types
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -297,21 +298,52 @@ class PipelineWorker:
 
             def _run_pipeline():
                 with _autocast_ctx:
+                    _step = 32 if is_sana else 8
+                    w = max(256, round(params.width  / _step) * _step)
+                    h = max(256, round(params.height / _step) * _step)
                     call_kwargs = dict(
                         **prompt_kwargs,
-                        width=params.width,
-                        height=params.height,
+                        width=w,
+                        height=h,
                         num_inference_steps=params.steps,
                         generator=generators,
                         callback_on_step_end=on_step,
                         callback_on_step_end_tensor_inputs=["latents"],
                     )
-                    if params.init_image and not is_sana:
+                    _img2img_cleanup = None
+                    if params.init_image:
                         import PIL.Image as PILImage_
                         init_path = settings.images_dir / params.init_image
                         init_pil = PILImage_.open(init_path).convert("RGB")
-                        call_kwargs['image'] = init_pil
-                        call_kwargs['strength'] = params.strength
+                        if is_sana:
+                            # Pre-compute truncated timesteps.
+                            pipeline.scheduler.set_timesteps(params.steps, device=pipeline._execution_device)
+                            init_t = min(int(params.steps * params.strength), params.steps)
+                            t_start = max(params.steps - init_t, 0)
+                            order = getattr(pipeline.scheduler, 'order', 1)
+                            pipeline._img2img_timesteps = pipeline.scheduler.timesteps[t_start * order:]
+                            pipeline._img2img_image = init_pil
+
+                            # Patch scheduler.set_timesteps so that after
+                            # retrieve_timesteps() generates the full schedule
+                            # inside __call__, it immediately gets overwritten
+                            # with our truncated schedule.
+                            _orig_st = pipeline.scheduler.set_timesteps
+                            def _patched_st(self, num_inference_steps=None, device=None, **kwargs):
+                                _orig_st(num_inference_steps, device=device, **kwargs)
+                                self.timesteps = pipeline._img2img_timesteps.to(device=device)
+                                pipeline._img2img_start_timestep = self.timesteps[:1]
+                            pipeline.scheduler.set_timesteps = types.MethodType(_patched_st, pipeline.scheduler)
+
+                            def _img2img_cleanup():
+                                pipeline._img2img_image = None
+                                pipeline._img2img_start_timestep = None
+                                if hasattr(pipeline, '_img2img_timesteps'):
+                                    del pipeline._img2img_timesteps
+                                pipeline.scheduler.set_timesteps = _orig_st
+                        else:
+                            call_kwargs['image'] = init_pil
+                            call_kwargs['strength'] = params.strength
                     if type(pipeline) is SanaPAGPipeline:
                         call_kwargs['guidance_scale'] = 0
                         call_kwargs['pag_scale'] = params.cfg
@@ -319,13 +351,16 @@ class PipelineWorker:
                     else:
                         call_kwargs['guidance_scale'] = params.cfg
                         if is_sana:
-                            #call_kwargs['complex_human_instruction'] = []
-                            pass
+                            call_kwargs['use_resolution_binning'] = False
                         else:
                             # guidance_rescale is an SD1/SDXL concept;
                             # SanaPipeline doesn't accept this argument.
                             call_kwargs['guidance_rescale'] = params.cfg_rescale_multiplier
-                    return pipeline(**call_kwargs)
+                    try:
+                        return pipeline(**call_kwargs)
+                    finally:
+                        if _img2img_cleanup is not None:
+                            _img2img_cleanup()
 
             result = await asyncio.to_thread(_run_pipeline)
 

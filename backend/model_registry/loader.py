@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import gc
 import logging
+import types
 
+import torch
 from diffusers import SanaPAGPipeline
+from diffusers.utils.torch_utils import randn_tensor
 
 from backend.config import settings
 from backend.domain import ModelEntry
@@ -193,7 +196,43 @@ def _load_sana_pipeline(entry: ModelEntry):
         pipeline.text_encoder.to(torch.bfloat16)
         pipeline.transformer = pipeline.transformer.to(torch.bfloat16)
 
+    # ── img2img monkey patches ──────────────────────────────────────
+    _apply_sana_img2img_patches(pipeline)
+
     return pipeline
+
+
+# ---------------------------------------------------------------------------
+# img2img monkey-patches for SanaPipeline
+# ---------------------------------------------------------------------------
+
+def _apply_sana_img2img_patches(pipe):
+    """Monkey-patch a SanaPipeline instance to support img2img.
+
+    Only ``prepare_latents`` is patched (a regular method — instance
+    resolution works).  The worker is responsible for setting
+    ``_img2img_image`` on the pipe and patching ``scheduler.set_timesteps``
+    to truncate the denoising schedule.
+    """
+    _orig_prepare_latents = pipe.prepare_latents
+
+    def patched_prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, generator, latents=None):
+        image = getattr(self, "_img2img_image", None)
+        if image is None or latents is not None:
+            return _orig_prepare_latents(batch_size, num_channels_latents, height, width, dtype, device, generator, latents)
+
+        image_t = self.image_processor.preprocess(image, height=height, width=width).to(device=device, dtype=self.vae.dtype)
+        with torch.no_grad():
+            image_latents = self.vae.encode(image_t).latent
+        image_latents = image_latents * self.vae.config.scaling_factor
+        if image_latents.shape[0] != batch_size:
+            image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
+
+        noise = randn_tensor(image_latents.shape, generator=generator, device=device, dtype=dtype)
+        start_t = self._img2img_start_timestep.to(device).repeat(batch_size)
+        return self.scheduler.add_noise(image_latents.to(dtype), noise, start_t)
+
+    pipe.prepare_latents = types.MethodType(patched_prepare_latents, pipe)
 
 
 # ---------------------------------------------------------------------------

@@ -108,7 +108,7 @@ function app() {
         if (this._updatingAR) return;
         if (this.lockAspectRatio && this._aspectRatioValue) {
           this._updatingAR = true;
-          this.height = this._roundTo64(val / this._aspectRatioValue);
+          this.height = this._snap(val / this._aspectRatioValue);
           this._updatingAR = false;
         }
         this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
@@ -117,7 +117,7 @@ function app() {
         if (this._updatingAR) return;
         if (this.lockAspectRatio && this._aspectRatioValue) {
           this._updatingAR = true;
-          this.width = this._roundTo64(val * this._aspectRatioValue);
+          this.width = this._snap(val * this._aspectRatioValue);
           this._updatingAR = false;
         }
         this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
@@ -128,6 +128,7 @@ function app() {
         const saved = localStorage.getItem('localScanPath');
         if (saved) this.localScanPath = saved;
       } catch (_) {}
+
       this.$watch('localScanPath', (val) => {
         try { localStorage.setItem('localScanPath', val); } catch (_) {}
       });
@@ -266,6 +267,7 @@ function app() {
     // ----------------------------------------------------------------
 
     async generate(prepend = false) {
+      this.snapResolution();
       if (!this.modelKey) { this._setError('Please select a model first.'); return; }
       const effectiveBoardId = this.targetBoardId || this._currentBoardId;
       if (!effectiveBoardId) { this._setError('No gallery selected — please wait for the gallery to load or create one on the right panel.'); return; }
@@ -882,11 +884,24 @@ function app() {
       if (ratio === 'custom') { this.lockAspectRatio = false; this._aspectRatioValue = null; return; }
       const [w, h] = ratio.split(':').map(Number);
       this._aspectRatioValue = w / h;
-      this.height = this._roundTo64(this.width / this._aspectRatioValue);
+      this.height = this._snap(this.width / this._aspectRatioValue);
       this.lockAspectRatio = true;
     },
 
-    _roundTo64(n) { return Math.max(256, Math.round(n / 64) * 64); },
+    get resolutionStep() {
+      const m = this.models.find(m => m.key === this.modelKey);
+      return m?.base === 'sana' ? 32 : 8;
+    },
+
+    snapResolution() {
+      const s = this.resolutionStep;
+      const w = Math.max(256, Math.round(this.width  / s) * s);
+      const h = Math.max(256, Math.round(this.height / s) * s);
+      if (w !== this.width)  this.width  = w;
+      if (h !== this.height) this.height = h;
+    },
+
+    _snap(n) { return Math.max(256, Math.round(n / this.resolutionStep) * this.resolutionStep); },
 
     // ----------------------------------------------------------------
     // Gallery navigation
