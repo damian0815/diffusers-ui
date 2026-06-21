@@ -78,6 +78,12 @@
                      title="Generate  ·  ⌘↩">
                <span x-text="isEnqueuing ? '· · ·' : '▶ Generate'"></span>
              </button>
+             <button class="btn-cancel"
+                     @click="cancelGeneration()"
+                     x-show="isGenerating"
+                     title="Cancel current generation">
+               ✕ Cancel
+             </button>
              <button class="icon-btn generate-priority" @click="generate(true)"
                      :disabled="isEnqueuing"
                      title="Front of queue  ·  ⌘⇧↩">⏫</button>
@@ -95,7 +101,7 @@
            <div class="field-group" x-show="sourceImage" style="margin-top:8px">
              <div class="img2img-row">
                <div class="img2img-thumb">
-                 <img :src="sourceImage.url">
+                 <img :src="sourceImage?.url">
                </div>
                <div class="img2img-controls">
                  <button class="icon-btn sm" @click="clearSourceImage()" title="Remove">✕</button>

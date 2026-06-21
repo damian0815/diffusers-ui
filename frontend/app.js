@@ -83,10 +83,12 @@ function app() {
     // idk
     loadedModelKey: null,
     clearingCache: false,
+    resolutionStep: 8,
 
     async init() {
       Layout.init();
       await this.loadModels();
+      this._updateResolutionStep();
       this.setupKeyboardShortcuts();
 
       // Initialise session-scoped state that can't be serialised as plain data
@@ -122,6 +124,7 @@ function app() {
         }
         this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
       });
+      this.$watch('modelKey', () => this._updateResolutionStep());
 
       // Restore persisted local scan path
       try {
@@ -477,7 +480,7 @@ function app() {
       const meta = this.selectedImageMeta;
       if (!meta) return;
       if (what === 'all' || what === 'prompt')  { this.prompt = meta.prompt || ''; this.negativePrompt = meta.negative_prompt || ''; }
-      if (what === 'all' || what === 'size')    { this.width = meta.width; this.height = meta.height; }
+      if (what === 'all' || what === 'size')    { this._updatingAR = true; this.width = meta.width; this.height = meta.height; this._updatingAR = false; }
       if (what === 'all' || what === 'model')   { this.modelKey = meta.model_key || this.modelKey; }
       if (what === 'all' || what === 'seed')    { this.seed = meta.seed; }
       if (what === 'all' || what === 'steps')   { this.steps = meta.steps; this.cfg = meta.cfg; this.cfgRescale = meta.cfg_rescale_multiplier; this.sampler = meta.sampler; this.predictionType = meta.prediction_type || 'default'; }
@@ -578,6 +581,14 @@ function app() {
     async clearQueue() {
       try { await fetch('/api/v1/queue/default/clear', { method: 'PUT' }); this.queueItems = []; await this.loadQueueDetails(); }
       catch (e) { this._setError('Could not clear queue.'); }
+    },
+
+    async cancelGeneration() {
+      try {
+        await fetch('/api/v1/queue/default/cancel_current', { method: 'PUT' });
+      } catch (e) {
+        this._setError('Could not cancel generation.');
+      }
     },
 
     async loadQueueDetails() {
@@ -865,7 +876,7 @@ function app() {
         case 'negPrompt':     this.negativePrompt = meta.negative_prompt || ''; break;
         case 'model':         if (meta.model_key) this.modelKey = meta.model_key; break;
         case 'seed':          this.seed = meta.seed; break;
-        case 'size':          this.width = meta.width; this.height = meta.height; break;
+        case 'size':          this._updatingAR = true; this.width = meta.width; this.height = meta.height; this._updatingAR = false; break;
         case 'steps':         this.steps = meta.steps; break;
         case 'cfg':           this.cfg = meta.cfg; break;
         case 'cfgRescale':    this.cfgRescale = meta.cfg_rescale_multiplier; break;
@@ -888,15 +899,16 @@ function app() {
       this.lockAspectRatio = true;
     },
 
-    get resolutionStep() {
+    _updateResolutionStep() {
       const m = this.models.find(m => m.key === this.modelKey);
-      return m?.base === 'sana' ? 32 : 8;
+      this.resolutionStep = m?.base === 'sana' ? 32 : 8;
     },
 
     snapResolution() {
       const s = this.resolutionStep;
       const w = Math.max(256, Math.round(this.width  / s) * s);
       const h = Math.max(256, Math.round(this.height / s) * s);
+      console.log("snapped to", w, h, "because step", s)
       if (w !== this.width)  this.width  = w;
       if (h !== this.height) this.height = h;
     },

@@ -229,8 +229,17 @@ def _apply_sana_img2img_patches(pipe):
             image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
         noise = randn_tensor(image_latents.shape, generator=generator, device=device, dtype=dtype)
-        start_t = self._img2img_start_timestep.to(device).repeat(batch_size)
-        return self.scheduler.add_noise(image_latents.to(dtype), noise, start_t)
+
+        # 1. Use scale_noise, not add_noise
+        # 2. After _patched_st fires, self.scheduler.timesteps[0] IS the start timestep
+        self.scheduler.set_begin_index(0)
+        return self.scheduler.scale_noise(
+            sample=image_latents.to(dtype),
+            timestep=self.scheduler.timesteps[:1].expand(batch_size),
+            noise=noise,
+        )
+        #start_t = self._img2img_start_timestep.to(device).repeat(batch_size)
+        #return self.scheduler.add_noise(image_latents.to(dtype), noise, start_t)
 
     pipe.prepare_latents = types.MethodType(patched_prepare_latents, pipe)
 

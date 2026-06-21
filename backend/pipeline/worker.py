@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import types
 import uuid
 from pathlib import Path
@@ -12,7 +13,7 @@ import diffusers
 from diffusers import SanaPAGPipeline
 
 from backend.config import settings
-from backend.domain import QueueItem, ItemStatus
+from backend.domain import GenerationCancelled, QueueItem, ItemStatus
 from backend.pipeline.batcher import group_into_batches
 from backend.pipeline.preview import latents_to_preview_image, PreviewBroadcaster
 from backend.pipeline.compel_encoder import build_prompt_embeds
@@ -111,6 +112,9 @@ class PipelineWorker:
         # _idle is SET when no generation is in flight; CLEARED while running one.
         self._idle = asyncio.Event()
         self._idle.set()
+        # Thread-safe event signalled by cancel_generation() and checked in the
+        # pipeline step callback (which runs in a thread-pool thread).
+        self._cancel_event = threading.Event()
         # Adaptive batch-size advisor: starts at probe=1, ramps up by +1 on each
         # successful run, regresses on OOM, and fits a power-law memory model.
         self._mem_advisor = MemoryAdvisor(device=settings.device)
@@ -152,12 +156,24 @@ class PipelineWorker:
         """True when no generation is currently in flight."""
         return self._idle.is_set()
 
+    def cancel_generation(self) -> None:
+        """Request that the current in-flight generation be aborted.
+
+        Thread-safe — sets a ``threading.Event`` that the pipeline step callback
+        checks on every denoising step.  Returns immediately; the worker will
+        cancel the current batch asynchronously.
+        """
+        self._cancel_event.set()
+
     async def _run_batch(self, batch: list[QueueItem]) -> bool:
         """Run a single batch: load model, generate, save, record.
 
         Returns True if the batch ended in an OOM (items have been requeued /
         failed by _handle_oom); False on success or non-OOM failure.
         """
+        # Reset the cancel signal so this batch can run unless interrupted.
+        self._cancel_event.clear()
+
         entry = self._registry.get(batch[0].params.model_key)
         if entry is None:
             error_msg = f"Model key {batch[0].params.model_key!r} not found in registry (have: {[e.key for e in self._registry.all()]})"
@@ -224,6 +240,10 @@ class PipelineWorker:
         event_loop = asyncio.get_event_loop()
 
         def on_step(pipe, step: int, timestep, callback_kwargs: dict) -> dict:
+            # Check for user-requested cancellation on every denoising step.
+            if self._cancel_event.is_set():
+                raise GenerationCancelled()
+
             step_counter["n"] += 1
             if step_counter["n"] % settings.preview_every_n_steps == 0:
                 # ------------------------------------------------------------------
@@ -281,6 +301,11 @@ class PipelineWorker:
                 shift = 1.0 + 0.5 * (image_pixel_count / 1024 ** 2)
                 pipeline.scheduler.set_shift(shift)
 
+            # Fast-path: if cancellation was requested before inference started,
+            # skip straight to the GenerationCancelled handler.
+            if self._cancel_event.is_set():
+                raise GenerationCancelled()
+
             # Reset peak-memory counter immediately before the pipeline call so
             # that capture_peak() below reflects only this inference run.
             self._mem_advisor.reset_peak()
@@ -329,10 +354,19 @@ class PipelineWorker:
                             # inside __call__, it immediately gets overwritten
                             # with our truncated schedule.
                             _orig_st = pipeline.scheduler.set_timesteps
+
                             def _patched_st(self, num_inference_steps=None, device=None, **kwargs):
                                 _orig_st(num_inference_steps, device=device, **kwargs)
-                                self.timesteps = pipeline._img2img_timesteps.to(device=device)
+                                self.timesteps = pipeline._img2img_timesteps.to(
+                                    device=device if device else self.timesteps.device)
+                                self.sigmas = self.sigmas[-(len(self.timesteps) + 1):]  # keep sigmas aligned
                                 pipeline._img2img_start_timestep = self.timesteps[:1]
+                                self.set_begin_index(0)  # ← add this so scale_noise uses the right sigma
+
+                            #def _patched_st(self, num_inference_steps=None, device=None, **kwargs):
+                            #    _orig_st(num_inference_steps, device=device, **kwargs)
+                            #    self.timesteps = pipeline._img2img_timesteps.to(device=device)
+                            #    pipeline._img2img_start_timestep = self.timesteps[:1]
                             pipeline.scheduler.set_timesteps = types.MethodType(_patched_st, pipeline.scheduler)
 
                             def _img2img_cleanup():
@@ -379,6 +413,16 @@ class PipelineWorker:
                 await self._record_in_gallery(item, image_name, entry.name)
 
             return False  # success — no OOM
+
+        except GenerationCancelled:
+            logger.info("Generation cancelled by user — marking %d item(s) as cancelled.", len(batch))
+            for item in batch:
+                await self._queue.mark_cancelled(item)
+                await self._broadcaster.broadcast_event(
+                    "queue_item_cancelled",
+                    {"item_id": item.item_id},
+                )
+            return False
 
         except Exception as exc:
             if _is_oom(exc):

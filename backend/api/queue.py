@@ -306,6 +306,36 @@ async def clear_queue(queue_id: str, request: Request):
     return {"queue_id": queue_id, "cancelled_count": count}
 
 
+@router.put("/cancel_current")
+async def cancel_current_generation(queue_id: str, request: Request):
+    """Cancel the currently in-flight generation (if any).
+
+    Signals the worker to abort the current batch and marks all PROCESSING
+    items as CANCELLED.  Pending (not-yet-started) items are unaffected.
+    """
+    queue = request.app.state.queue
+    worker = request.app.state.worker
+    broadcaster = request.app.state.broadcaster
+
+    # 1. Signal the worker thread to abort inference on the next step.
+    worker.cancel_generation()
+
+    # 2. Mark any processing items as cancelled (the worker will also do this
+    #    when GenerationCancelled is caught, but we do it here too so the
+    #    frontend gets the WS event immediately rather than waiting for the
+    #    step callback to fire).
+    cancelled_ids = await queue.cancel_processing_items()
+
+    # 3. Broadcast cancellation events for each item.
+    for item_id in cancelled_ids:
+        await broadcaster.broadcast_event(
+            "queue_item_cancelled",
+            {"item_id": item_id},
+        )
+
+    return {"queue_id": queue_id, "cancelled_ids": cancelled_ids}
+
+
 @router.put("/prune")
 async def prune_queue(queue_id: str, request: Request):
     """Remove completed/failed/cancelled items from tracking."""

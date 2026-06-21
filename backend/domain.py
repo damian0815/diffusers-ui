@@ -2,6 +2,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
+
+class GenerationCancelled(Exception):
+    """Raised inside a pipeline step callback to abort an in-flight generation
+    when the user requests cancellation.  Caught explicitly in
+    PipelineWorker._run_batch before the generic Exception handler so that
+    OOM and real errors are still properly distinguished."""
+
 Sampler = Literal[
     'dpmpp_sde_k', 'dpmpp_sde', 'dpmpp_2m_sde_k', 'dpmpp_2m_sde',
     'dpmpp', 'dpmpp_2m', 'dpmpp_3m', 'euler', 'euler_a', 'ddim', 'lms', 'kdpm_2_a',

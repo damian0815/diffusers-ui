@@ -141,6 +141,29 @@ class QueueManager:
             item.error = error
         await self._persist(item)
 
+    async def mark_cancelled(self, item: QueueItem) -> None:
+        """Mark a single item as CANCELLED (used by the worker on abort)."""
+        async with self._lock:
+            item.status = ItemStatus.CANCELLED
+        await self._persist(item)
+
+    async def cancel_processing_items(self) -> list[int]:
+        """Mark all PROCESSING items as CANCELLED.  Returns their item_ids."""
+        cancelled: list[int] = []
+        async with self._lock:
+            for item in self._all_items.values():
+                if item.status == ItemStatus.PROCESSING:
+                    item.status = ItemStatus.CANCELLED
+                    cancelled.append(item.item_id)
+        for item_id in cancelled:
+            try:
+                item = self._all_items.get(item_id)
+                if item:
+                    await self._persist(item)
+            except Exception:
+                pass
+        return cancelled
+
     async def cancel_item(self, item_id: int) -> bool:
         """Cancel a pending item. Returns False if not pending or not found."""
         async with self._lock:
