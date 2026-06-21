@@ -340,6 +340,28 @@ class PipelineWorker:
                         import PIL.Image as PILImage_
                         init_path = settings.images_dir / params.init_image
                         init_pil = PILImage_.open(init_path).convert("RGB")
+                        if params.crop_width > 0:
+                            src_w, src_h = init_pil.size
+                            out_w, out_h = params.width, params.height
+                            rough_w = min(params.crop_width * 1.2, 1.0)
+                            rough_h = min(params.crop_height * 1.2, 1.0)
+                            rough_l = max(params.crop_left - (rough_w - params.crop_width) / 2, 0.0)
+                            rough_t = max(params.crop_top - (rough_h - params.crop_height) / 2, 0.0)
+                            rough_l = min(rough_l, 1.0 - rough_w)
+                            rough_t = min(rough_t, 1.0 - rough_h)
+                            px_left = int(rough_l * src_w)
+                            px_top = int(rough_t * src_h)
+                            px_right = int((rough_l + rough_w) * src_w)
+                            px_bottom = int((rough_t + rough_h) * src_h)
+                            init_pil = init_pil.crop((px_left, px_top, px_right, px_bottom))
+                            rough_out_w = int(out_w * 1.2)
+                            rough_out_h = int(out_h * 1.2)
+                            init_pil = init_pil.resize((rough_out_w, rough_out_h), PILImage.LANCZOS)
+                            x0 = (rough_out_w - out_w) // 2
+                            y0 = (rough_out_h - out_h) // 2
+                            init_pil = init_pil.crop((x0, y0, x0 + out_w, y0 + out_h))
+                        else:
+                            init_pil = init_pil.resize((params.width, params.height), PILImage.LANCZOS)
                         if is_sana:
                             # Pre-compute truncated timesteps.
                             pipeline.scheduler.set_timesteps(params.steps, device=pipeline._execution_device)

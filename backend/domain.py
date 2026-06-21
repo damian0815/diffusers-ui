@@ -32,6 +32,10 @@ class ImageGenerationParams:
     prediction_type: str = 'default'  # 'default' = don't override; else e.g. 'epsilon', 'v_prediction', 'flow_prediction'
     init_image: str | None = None   # image_name from gallery, or uploaded filename
     strength: float = 0.75          # 0.0–1.0 how much noise to add
+    crop_left: float = 0.0          # normalized 0-1 crop rect
+    crop_top: float = 0.0
+    crop_width: float = 0.0         # 0 = no crop (backward compat)
+    crop_height: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,10 @@ def make_params(**overrides) -> ImageGenerationParams:
         model_key="test_model",
         init_image=None,
         strength=0.75,
+        crop_left=0.0,
+        crop_top=0.0,
+        crop_width=0.0,
+        crop_height=0.0,
     )
     return ImageGenerationParams(**{**defaults, **overrides})
 

@@ -190,12 +190,20 @@
           <div class="row">
             <div class="field">
               <label class="field-label">Width</label>
-              <input type="number" x-model.number="width" :step="resolutionStep" min="256" @blur="snapResolution">
+              <input type="number" x-model.number="width" :step="resolutionStep" min="256"
+                     @input="onWidthInput()"
+                     @keydown.up.prevent="onWidthStep(1)"
+                     @keydown.down.prevent="onWidthStep(-1)"
+                     @blur="onWidthBlur()">
             </div>
             <button class="icon-btn swap-btn" @click="swapDimensions()" title="Swap width ↔ height">⇅</button>
             <div class="field">
               <label class="field-label">Height</label>
-              <input type="number" x-model.number="height" :step="resolutionStep" min="256" @blur="snapResolution">
+              <input type="number" x-model.number="height" :step="resolutionStep" min="256"
+                     @input="onHeightInput()"
+                     @keydown.up.prevent="onHeightStep(1)"
+                     @keydown.down.prevent="onHeightStep(-1)"
+                     @blur="onHeightBlur()">
             </div>
             <button class="icon-btn ar-lock" :class="{active: lockAspectRatio}"
                     @click="toggleLockAspectRatio()"

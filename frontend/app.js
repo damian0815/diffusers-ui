@@ -65,7 +65,9 @@ function app() {
     lockAspectRatio: false,
     selectedAspectRatio: 'custom',
     _aspectRatioValue: null,
-    _updatingAR: false,
+    _settingBoth: false,
+    _widthTimer: null,
+    _heightTimer: null,
 
     // Known aspect ratios for fuzzy matching
     _KNOWN_AR: [
@@ -106,24 +108,6 @@ function app() {
         }
       });
 
-      this.$watch('width', (val) => {
-        if (this._updatingAR) return;
-        if (this.lockAspectRatio && this._aspectRatioValue) {
-          this._updatingAR = true;
-          this.height = this._snap(val / this._aspectRatioValue);
-          this._updatingAR = false;
-        }
-        this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
-      });
-      this.$watch('height', (val) => {
-        if (this._updatingAR) return;
-        if (this.lockAspectRatio && this._aspectRatioValue) {
-          this._updatingAR = true;
-          this.width = this._snap(val * this._aspectRatioValue);
-          this._updatingAR = false;
-        }
-        this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
-      });
       this.$watch('modelKey', () => this._updateResolutionStep());
 
       // Restore persisted local scan path
@@ -215,11 +199,9 @@ function app() {
       window.addEventListener('set-source-image', (e) => {
         const { name, url, width, height } = e.detail;
         this.sourceImage = { name, url, width, height };
-        this.width = width;
-        this.height = height;
         this.lockAspectRatio = true;
         this._aspectRatioValue = width / height;
-        this.selectedAspectRatio = this._detectAspectRatio(width, height);
+        this._conformResolution('incoming', { width, height });
       });
 
       // Reconcile any pending/processing items that were in flight before this
@@ -426,11 +408,9 @@ function app() {
               width: data.width,
               height: data.height,
             };
-            this.width = data.width;
-            this.height = data.height;
             this.lockAspectRatio = true;
             this._aspectRatioValue = data.width / data.height;
-            this.selectedAspectRatio = this._detectAspectRatio(data.width, data.height);
+            this._conformResolution('incoming', { width: data.width, height: data.height });
           } catch (e) {
             this._setError('Upload failed');
           }
@@ -445,8 +425,7 @@ function app() {
       this.lockAspectRatio = false;
       this._aspectRatioValue = null;
       this.selectedAspectRatio = 'custom';
-      this.width = 512;
-      this.height = 512;
+      this._setBothWidthAndHeight(512, 512);
     },
 
     // ----------------------------------------------------------------
@@ -480,7 +459,7 @@ function app() {
       const meta = this.selectedImageMeta;
       if (!meta) return;
       if (what === 'all' || what === 'prompt')  { this.prompt = meta.prompt || ''; this.negativePrompt = meta.negative_prompt || ''; }
-      if (what === 'all' || what === 'size')    { this._updatingAR = true; this.width = meta.width; this.height = meta.height; this._updatingAR = false; }
+      if (what === 'all' || what === 'size')    { this._conformResolution('incoming', { width: meta.width, height: meta.height }); }
       if (what === 'all' || what === 'model')   { this.modelKey = meta.model_key || this.modelKey; }
       if (what === 'all' || what === 'seed')    { this.seed = meta.seed; }
       if (what === 'all' || what === 'steps')   { this.steps = meta.steps; this.cfg = meta.cfg; this.cfgRescale = meta.cfg_rescale_multiplier; this.sampler = meta.sampler; this.predictionType = meta.prediction_type || 'default'; }
@@ -856,7 +835,82 @@ function app() {
     toggleInfoOverlay() { this.showInfoOverlay = !this.showInfoOverlay; },
 
     swapDimensions() {
-      [this.width, this.height] = [this.height, this.width];
+      this._setBothWidthAndHeight(this.height, this.width);
+    },
+
+    _setBothWidthAndHeight(w, h) {
+      this._settingBoth = true;
+      this.width = w;
+      this.height = h;
+      this._settingBoth = false;
+      this.selectedAspectRatio = this._detectAspectRatio(w, h);
+    },
+
+    _conformResolution(source, dims) {
+      const s = this.resolutionStep;
+      switch (source) {
+        case 'width-typed': {
+          const w = Math.max(256, Math.round(dims.width / s) * s);
+          if (this.lockAspectRatio && this._aspectRatioValue) {
+            const h = Math.max(256, Math.round(w / this._aspectRatioValue / s) * s);
+            this._setBothWidthAndHeight(w, h);
+          } else {
+            this._setBothWidthAndHeight(w, this.height);
+          }
+          break;
+        }
+        case 'height-typed': {
+          const h = Math.max(256, Math.round(dims.height / s) * s);
+          if (this.lockAspectRatio && this._aspectRatioValue) {
+            const w = Math.max(256, Math.round(h * this._aspectRatioValue / s) * s);
+            this._setBothWidthAndHeight(w, h);
+          } else {
+            this._setBothWidthAndHeight(this.width, h);
+          }
+          break;
+        }
+        case 'aspect-ratio':
+        case 'incoming': {
+          const w = Math.max(256, Math.round(dims.width / s) * s);
+          const h = Math.max(256, Math.round(dims.height / s) * s);
+          this._setBothWidthAndHeight(w, h);
+          break;
+        }
+      }
+    },
+
+    onWidthInput() {
+      clearTimeout(this._widthTimer);
+      this._widthTimer = setTimeout(() => {
+        this._conformResolution('width-typed', { width: this.width });
+      }, 300);
+    },
+
+    onWidthStep(dir) {
+      this.width += dir * this.resolutionStep;
+      this._conformResolution('width-typed', { width: this.width });
+    },
+
+    onWidthBlur() {
+      clearTimeout(this._widthTimer);
+      this._conformResolution('width-typed', { width: this.width });
+    },
+
+    onHeightInput() {
+      clearTimeout(this._heightTimer);
+      this._heightTimer = setTimeout(() => {
+        this._conformResolution('height-typed', { height: this.height });
+      }, 300);
+    },
+
+    onHeightStep(dir) {
+      this.height += dir * this.resolutionStep;
+      this._conformResolution('height-typed', { height: this.height });
+    },
+
+    onHeightBlur() {
+      clearTimeout(this._heightTimer);
+      this._conformResolution('height-typed', { height: this.height });
     },
 
     _detectAspectRatio(w, h) {
@@ -876,7 +930,7 @@ function app() {
         case 'negPrompt':     this.negativePrompt = meta.negative_prompt || ''; break;
         case 'model':         if (meta.model_key) this.modelKey = meta.model_key; break;
         case 'seed':          this.seed = meta.seed; break;
-        case 'size':          this._updatingAR = true; this.width = meta.width; this.height = meta.height; this._updatingAR = false; break;
+        case 'size':          this._conformResolution('incoming', { width: meta.width, height: meta.height }); break;
         case 'steps':         this.steps = meta.steps; break;
         case 'cfg':           this.cfg = meta.cfg; break;
         case 'cfgRescale':    this.cfgRescale = meta.cfg_rescale_multiplier; break;
@@ -893,10 +947,11 @@ function app() {
 
     onAspectRatioSelect(ratio) {
       if (ratio === 'custom') { this.lockAspectRatio = false; this._aspectRatioValue = null; return; }
-      const [w, h] = ratio.split(':').map(Number);
-      this._aspectRatioValue = w / h;
-      this.height = this._snap(this.width / this._aspectRatioValue);
+      const [rw, rh] = ratio.split(':').map(Number);
+      this._aspectRatioValue = rw / rh;
       this.lockAspectRatio = true;
+      const targetHeight = Math.round(this.width / this._aspectRatioValue);
+      this._conformResolution('aspect-ratio', { width: this.width, height: targetHeight });
     },
 
     _updateResolutionStep() {
@@ -908,9 +963,9 @@ function app() {
       const s = this.resolutionStep;
       const w = Math.max(256, Math.round(this.width  / s) * s);
       const h = Math.max(256, Math.round(this.height / s) * s);
-      console.log("snapped to", w, h, "because step", s)
-      if (w !== this.width)  this.width  = w;
-      if (h !== this.height) this.height = h;
+      if (w !== this.width || h !== this.height) {
+        this._setBothWidthAndHeight(w, h);
+      }
     },
 
     _snap(n) { return Math.max(256, Math.round(n / this.resolutionStep) * this.resolutionStep); },
