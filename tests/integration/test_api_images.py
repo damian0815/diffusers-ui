@@ -15,8 +15,9 @@ async def test_list_images_empty_board(client):
     board_id = await create_board(client)
     resp = await client.get(f"/api/v1/images/?board_id={board_id}")
     assert resp.status_code == 200
-    assert isinstance(resp.json(), list)
-    assert len(resp.json()) == 0
+    data = resp.json()
+    assert isinstance(data["items"], list)
+    assert len(data["items"]) == 0
 
 
 @pytest.mark.asyncio

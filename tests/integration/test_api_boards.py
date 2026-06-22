@@ -18,7 +18,7 @@ async def test_list_boards_returns_list(client):
 @pytest.mark.asyncio
 async def test_create_board(client):
     data = await create_board(client, "My Gallery")
-    assert data["name"] == "My Gallery"
+    assert data["board_name"] == "My Gallery"
     assert "board_id" in data
 
 
@@ -26,7 +26,7 @@ async def test_create_board(client):
 async def test_created_board_appears_in_list(client):
     await create_board(client, "Special Gallery")
     resp = await client.get("/api/v1/boards/")
-    names = [g["name"] for g in resp.json()]
+    names = [g["board_name"] for g in resp.json()]
     assert "Special Gallery" in names
 
 
@@ -37,7 +37,7 @@ async def test_rename_board(client):
         f"/api/v1/boards/{board['board_id']}?board_name=New+Name"
     )
     assert resp.status_code == 200
-    assert resp.json()["name"] == "New Name"
+    assert resp.json()["board_name"] == "New Name"
 
 
 @pytest.mark.asyncio

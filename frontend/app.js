@@ -446,8 +446,77 @@ function app() {
     // Crop modal
     // ----------------------------------------------------------------
 
-    openCropModal() {
+    async openCropModal() {
+      console.log('crop: openCropModal', { sourceImage: this.sourceImage, cropRect: this.cropRect });
       this._showCropModal = true;
+      await this.$nextTick();
+      const img = this.$refs?.cropImg;
+      console.log('crop: after $nextTick', { img, complete: img?.complete, clientWidth: img?.clientWidth, naturalWidth: img?.naturalWidth });
+      if (img && !img.complete) {
+        await new Promise(resolve => { img.onload = resolve; img.onerror = resolve; });
+        console.log('crop: image loaded via onload', { clientWidth: img.clientWidth, naturalWidth: img.naturalWidth });
+      }
+      this._refreshCropOverlay();
+    },
+
+    _refreshCropOverlay() {
+      console.log('crop: _refreshCropOverlay');
+      const container = this.$refs?.cropContainer;
+      const svg = container?.querySelector('svg.crop-overlay');
+      if (!svg || !this.cropRect || !this.sourceImage) return;
+
+      if (this.$refs?.cropImg) {
+        this.$refs.cropImg.offsetHeight; // force reflow
+      }
+
+      const scale = this._cropDisplayScale();
+      console.log('crop: _refreshCropOverlay scale', scale);
+      if (!scale || !isFinite(scale)) return;
+
+      const r = this._scaledRect(this.cropRect);
+      const q = this._scaledRect(this._quantizedCropRect());
+      const hs = 10, half = hs / 2;
+
+      function set(id, attrs) {
+        const el = svg.querySelector(id);
+        if (!el) return;
+        for (const [k, v] of Object.entries(attrs)) {
+          el.setAttribute(k, v);
+        }
+      }
+
+      // Free rect
+      if (r) {
+        set('.crop-rect-free', { x: r.left, y: r.top, width: r.width, height: r.height });
+      }
+      // Quantized rect
+      if (q) {
+        set('.crop-rect-quantized', { x: q.left, y: q.top, width: q.width, height: q.height });
+      }
+      // Handles
+      if (r) {
+        const cursors = {
+          nw: 'nwse-resize', ne: 'nesw-resize',
+          sw: 'nesw-resize', se: 'nwse-resize',
+          n: 'ns-resize', s: 'ns-resize',
+          e: 'ew-resize', w: 'ew-resize',
+        };
+        const positions = {
+          nw: { x: r.left - half, y: r.top - half },
+          ne: { x: r.left + r.width - half, y: r.top - half },
+          sw: { x: r.left - half, y: r.top + r.height - half },
+          se: { x: r.left + r.width - half, y: r.top + r.height - half },
+          n:  { x: r.left + r.width / 2 - half, y: r.top - half },
+          s:  { x: r.left + r.width / 2 - half, y: r.top + r.height - half },
+          e:  { x: r.left + r.width - half, y: r.top + r.height / 2 - half },
+          w:  { x: r.left - half, y: r.top + r.height / 2 - half },
+        };
+        for (const [dir, pos] of Object.entries(positions)) {
+          set(`.crop-handle[data-handle="${dir}"]`, {
+            x: pos.x, y: pos.y, width: hs, height: hs, cursor: cursors[dir],
+          });
+        }
+      }
     },
 
     closeCropModal() {
@@ -474,48 +543,21 @@ function app() {
     _cropDisplayScale() {
       const img = this.$refs?.cropImg;
       if (!img || !this.sourceImage) return 1;
-      return img.clientWidth / this.sourceImage.width;
+      const scale = (img.clientWidth || img.naturalWidth || 0) / this.sourceImage.width;
+      console.log('crop: _cropDisplayScale', { clientWidth: img.clientWidth, naturalWidth: img.naturalWidth, sourceW: this.sourceImage.width, scale });
+      return scale;
     },
 
     _scaledRect(rect) {
-      if (!rect || !this.sourceImage) return null;
+      if (!rect || !this.sourceImage) { console.log('crop: _scaledRect null', { rect: !!rect, sourceImage: !!this.sourceImage }); return null; }
       const scale = this._cropDisplayScale();
+      if (!scale || !isFinite(scale)) { console.log('crop: _scaledRect bad scale', { scale }); return null; }
       return {
         left: rect.left * scale,
         top: rect.top * scale,
         width: rect.width * scale,
         height: rect.height * scale,
       };
-    },
-
-    _cropHandleAttrs(handle) {
-      const r = this._scaledRect(this.cropRect);
-      if (!r) return { display: 'none' };
-      const hs = 10;
-      const half = hs / 2;
-      const pos = {
-        nw: { x: r.left - half, y: r.top - half, cursor: 'nwse-resize' },
-        ne: { x: r.left + r.width - half, y: r.top - half, cursor: 'nesw-resize' },
-        sw: { x: r.left - half, y: r.top + r.height - half, cursor: 'nesw-resize' },
-        se: { x: r.left + r.width - half, y: r.top + r.height - half, cursor: 'nwse-resize' },
-        n:  { x: r.left + r.width / 2 - half, y: r.top - half, cursor: 'ns-resize' },
-        s:  { x: r.left + r.width / 2 - half, y: r.top + r.height - half, cursor: 'ns-resize' },
-        e:  { x: r.left + r.width - half, y: r.top + r.height / 2 - half, cursor: 'ew-resize' },
-        w:  { x: r.left - half, y: r.top + r.height / 2 - half, cursor: 'ew-resize' },
-      };
-      const p = pos[handle] || pos.se;
-      return { x: p.x, y: p.y, width: hs, height: hs, cursor: p.cursor };
-    },
-
-    cropFreeAttrs() {
-      const r = this._scaledRect(this.cropRect);
-      return r ? { x: r.left, y: r.top, width: r.width, height: r.height } : { display: 'none' };
-    },
-
-    cropQuantizedAttrs() {
-      const q = this._quantizedCropRect();
-      const r = this._scaledRect(q);
-      return r ? { x: r.left, y: r.top, width: r.width, height: r.height } : { display: 'none' };
     },
 
     onCropMouseDown(e) {
@@ -565,6 +607,8 @@ function app() {
         newRect = this._computeResizeRect(r, state.handle, dx, dy);
       }
       this.cropRect = newRect;
+      this._refreshCropOverlay();
+      if (state.type === 'resize') this._syncOutputToCropAspect();
     },
 
     _onCropMouseUp() {
@@ -575,6 +619,17 @@ function app() {
         this._cropMoveHandler = null;
         this._cropUpHandler = null;
       }
+    },
+
+    _syncOutputToCropAspect() {
+      if (!this.cropRect) return;
+      const aspect = this.cropRect.width / this.cropRect.height;
+      const s = this.resolutionStep;
+      const totalPx = this.width * this.height;
+      let h = Math.round(Math.sqrt(totalPx / aspect) / s) * s;
+      let w = Math.round(h * aspect / s) * s;
+      this.height = Math.max(256, h);
+      this.width = Math.max(256, w);
     },
 
     _computeResizeRect(r, handle, dx, dy) {

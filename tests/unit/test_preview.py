@@ -1,4 +1,5 @@
 """Unit tests for backend/pipeline/preview.py"""
+import asyncio
 import io
 import pytest
 import torch
@@ -70,6 +71,7 @@ async def test_broadcaster_sends_to_all_connections():
     broadcaster.add(ws1)
     broadcaster.add(ws2)
     await broadcaster.broadcast(item_id=1, step=5, total_steps=20, jpeg_bytes=b"fake")
+    await asyncio.sleep(0)
     assert len(ws1.messages) == 1
     assert len(ws2.messages) == 1
 
@@ -85,6 +87,7 @@ async def test_broadcaster_removes_dead_connections():
     ws = DeadWs()
     broadcaster.add(ws)
     await broadcaster.broadcast(item_id=1, step=1, total_steps=10, jpeg_bytes=b"x")
+    await asyncio.sleep(0)
     assert ws not in broadcaster._connections
 
 

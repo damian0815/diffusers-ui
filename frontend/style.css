@@ -210,8 +210,11 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   display: flex;
   gap: var(--gap);
   align-items: stretch;
-  margin-bottom: 2px;
+  padding: var(--gap-md);
+  margin: 0;
   flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .batch-count-field {
@@ -340,26 +343,7 @@ select option { background: var(--surface); }
   100% { background-position: -100% 0; }
 }
 
-.btn-cancel {
-  background: var(--danger-bg);
-  color: var(--danger);
-  border: 1px solid var(--danger);
-  border-radius: var(--r);
-  padding: 10px 14px;
-  font-size: 13px; font-weight: 600; letter-spacing: 0.01em;
-  cursor: pointer;
-  transition: opacity 0.12s, box-shadow 0.12s, transform 0.08s;
-  white-space: nowrap;
-  display: inline-flex; align-items: center; gap: 5px;
-}
-.btn-cancel:hover {
-  opacity: 0.91;
-  box-shadow: 0 0 16px rgba(248, 113, 113, 0.35);
-}
-.btn-cancel:active {
-  transform: scale(0.97);
-  opacity: 0.82;
-}
+
 
 .btn-secondary {
   background: var(--surface-2);
@@ -389,6 +373,7 @@ select option { background: var(--surface); }
 }
 .icon-btn:hover { color: var(--text); background: var(--surface); border-color: var(--border-2); }
 .icon-btn.active { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+.icon-btn.danger { color: var(--danger); }
 .icon-btn.danger:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
 .icon-btn.sm { padding: 3px 7px; font-size: 13px; font-weight: 600; }
 
@@ -1622,7 +1607,6 @@ select option { background: var(--surface); }
   width: 10;
   height: 10;
 }
-.crop-handle[data-handle] { cursor: inherit; }
 .crop-modal-footer {
   display: flex;
   align-items: center;

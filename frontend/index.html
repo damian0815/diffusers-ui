@@ -68,36 +68,34 @@
           <button class="tab-collapse-btn" onclick="Layout.toggleLeft()" title="Collapse  ·  T">&#8249;</button>
         </div>
 
+        <div class="row generate-row">
+          <button class="btn-primary"
+                  @click="generate(false)"
+                  :disabled="isEnqueuing || !modelKey"
+                  :class="{'is-loading': isEnqueuing}"
+                  title="Generate  ·  ⌘↩">
+            <span x-text="isEnqueuing ? '· · ·' : '▶ Generate'"></span>
+          </button>
+          <button class="icon-btn sm danger"
+                  @click="cancelGeneration()"
+                  x-show="isGenerating"
+                  title="Cancel current generation">✕</button>
+          <button class="icon-btn generate-priority" @click="generate(true)"
+                  :disabled="isEnqueuing"
+                  title="Front of queue  ·  ⌘⇧↩">⏫</button>
+          <div class="field batch-count-field" title="Number of images per prompt variant (seed auto-increments)">
+            <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
+                   style="width:56px;text-align:center" title="Batch count">
+          </div>
+          <span class="batch-hint-pill"
+                x-show="_totalGenCount() > 1"
+                x-text="`${_totalGenCount()} gens`"
+                title="Total generations: prompt variants × batch count"></span>
+        </div>
+
         <div class="panel-scroll">
 
-           <div class="row generate-row">
-             <button class="btn-primary"
-                     @click="generate(false)"
-                     :disabled="isEnqueuing || !modelKey"
-                     :class="{'is-loading': isEnqueuing}"
-                     title="Generate  ·  ⌘↩">
-               <span x-text="isEnqueuing ? '· · ·' : '▶ Generate'"></span>
-             </button>
-             <button class="btn-cancel"
-                     @click="cancelGeneration()"
-                     x-show="isGenerating"
-                     title="Cancel current generation">
-               ✕ Cancel
-             </button>
-             <button class="icon-btn generate-priority" @click="generate(true)"
-                     :disabled="isEnqueuing"
-                     title="Front of queue  ·  ⌘⇧↩">⏫</button>
-             <div class="field batch-count-field" title="Number of images per prompt variant (seed auto-increments)">
-               <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
-                      style="width:56px;text-align:center" title="Batch count">
-             </div>
-             <span class="batch-hint-pill"
-                   x-show="_totalGenCount() > 1"
-                   x-text="`${_totalGenCount()} gens`"
-                   title="Total generations: prompt variants × batch count"></span>
-           </div>
-
-           <!-- Img2img source -->
+          <!-- Img2img source -->
            <div class="field-group" x-show="sourceImage" style="margin-top:8px">
              <div class="img2img-row">
                <div class="img2img-thumb">
@@ -273,16 +271,16 @@
               <img :src="sourceImage?.url" class="crop-source-img" x-ref="cropImg">
               <svg class="crop-overlay"
                    @mousedown.prevent="onCropMouseDown($event)">
-                <rect x-bind="cropQuantizedAttrs()" class="crop-rect-quantized" />
-                <rect x-bind="cropFreeAttrs()" class="crop-rect-free" />
-                <rect x-bind="_cropHandleAttrs('nw')" class="crop-handle" data-handle="nw" />
-                <rect x-bind="_cropHandleAttrs('ne')" class="crop-handle" data-handle="ne" />
-                <rect x-bind="_cropHandleAttrs('sw')" class="crop-handle" data-handle="sw" />
-                <rect x-bind="_cropHandleAttrs('se')" class="crop-handle" data-handle="se" />
-                <rect x-bind="_cropHandleAttrs('n')"  class="crop-handle" data-handle="n" />
-                <rect x-bind="_cropHandleAttrs('s')"  class="crop-handle" data-handle="s" />
-                <rect x-bind="_cropHandleAttrs('e')"  class="crop-handle" data-handle="e" />
-                <rect x-bind="_cropHandleAttrs('w')"  class="crop-handle" data-handle="w" />
+                <rect class="crop-rect-quantized" />
+                <rect class="crop-rect-free" />
+                <rect class="crop-handle" data-handle="nw" />
+                <rect class="crop-handle" data-handle="ne" />
+                <rect class="crop-handle" data-handle="sw" />
+                <rect class="crop-handle" data-handle="se" />
+                <rect class="crop-handle" data-handle="n" />
+                <rect class="crop-handle" data-handle="s" />
+                <rect class="crop-handle" data-handle="e" />
+                <rect class="crop-handle" data-handle="w" />
               </svg>
             </div>
           </div>
@@ -302,6 +300,9 @@
                        @keydown.down.prevent="onHeightStep(-1)"
                        @blur="onHeightBlur()">
                 <button class="icon-btn sm" @click="swapDimensions()" title="Swap">⇄</button>
+                <button class="icon-btn sm" @click="toggleLockAspectRatio()"
+                        :title="lockAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio'"
+                        x-text="lockAspectRatio ? 'Lock' : 'Unlock'"></button>
               </div>
             </div>
             <div class="crop-modal-actions">
