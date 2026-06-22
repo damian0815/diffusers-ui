@@ -103,10 +103,11 @@
                <div class="img2img-thumb">
                  <img :src="sourceImage?.url">
                </div>
-               <div class="img2img-controls">
-                 <button class="icon-btn sm" @click="clearSourceImage()" title="Remove">✕</button>
-                 <div class="field">
-                   <label class="field-label">Strength</label>
+                <div class="img2img-controls">
+                  <button class="icon-btn sm" @click="clearSourceImage()" title="Remove">✕</button>
+                  <button class="icon-btn sm" @click="openCropModal()" title="Edit crop rectangle">✂️</button>
+                  <div class="field">
+                    <label class="field-label">Strength</label>
                    <div class="img2img-strength-row">
                      <input type="range" x-model.number="sourceStrength" min="0" max="1" step="0.05">
                      <span class="img2img-val" x-text="sourceStrength.toFixed(2)"></span>
@@ -258,6 +259,59 @@
 
         </div><!-- /panel-scroll -->
       </div><!-- /panel-inner -->
+
+      <!-- ── Crop modal ── -->
+      <div class="modal-backdrop" x-show="_showCropModal" @click.self="closeCropModal()"
+           x-transition.opacity style="display: none;">
+        <div class="crop-modal" @click.stop>
+          <div class="crop-modal-header">
+            <h3>Crop source image</h3>
+            <button class="icon-btn sm" @click="closeCropModal()">✕</button>
+          </div>
+          <div class="crop-modal-body">
+            <div class="crop-image-container" x-ref="cropContainer">
+              <img :src="sourceImage?.url" class="crop-source-img" x-ref="cropImg">
+              <svg class="crop-overlay"
+                   @mousedown.prevent="onCropMouseDown($event)">
+                <rect x-bind="cropQuantizedAttrs()" class="crop-rect-quantized" />
+                <rect x-bind="cropFreeAttrs()" class="crop-rect-free" />
+                <rect x-bind="_cropHandleAttrs('nw')" class="crop-handle" data-handle="nw" />
+                <rect x-bind="_cropHandleAttrs('ne')" class="crop-handle" data-handle="ne" />
+                <rect x-bind="_cropHandleAttrs('sw')" class="crop-handle" data-handle="sw" />
+                <rect x-bind="_cropHandleAttrs('se')" class="crop-handle" data-handle="se" />
+                <rect x-bind="_cropHandleAttrs('n')"  class="crop-handle" data-handle="n" />
+                <rect x-bind="_cropHandleAttrs('s')"  class="crop-handle" data-handle="s" />
+                <rect x-bind="_cropHandleAttrs('e')"  class="crop-handle" data-handle="e" />
+                <rect x-bind="_cropHandleAttrs('w')"  class="crop-handle" data-handle="w" />
+              </svg>
+            </div>
+          </div>
+          <div class="crop-modal-footer">
+            <div class="crop-resolution-section">
+              <label class="field-label">Output size</label>
+              <div class="crop-res-inputs">
+                <input type="number" x-model.number="width" :step="resolutionStep" min="64" max="4096"
+                       @input="onWidthInput()"
+                       @keydown.up.prevent="onWidthStep(1)"
+                       @keydown.down.prevent="onWidthStep(-1)"
+                       @blur="onWidthBlur()">
+                <span class="crop-res-x">×</span>
+                <input type="number" x-model.number="height" :step="resolutionStep" min="64" max="4096"
+                       @input="onHeightInput()"
+                       @keydown.up.prevent="onHeightStep(1)"
+                       @keydown.down.prevent="onHeightStep(-1)"
+                       @blur="onHeightBlur()">
+                <button class="icon-btn sm" @click="swapDimensions()" title="Swap">⇄</button>
+              </div>
+            </div>
+            <div class="crop-modal-actions">
+              <button class="btn-secondary" @click="closeCropModal()">Cancel</button>
+              <button class="btn-primary" @click="closeCropModal()">OK</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </aside>
 
     <!-- Drag handle (left) -->

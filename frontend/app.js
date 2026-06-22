@@ -86,6 +86,8 @@ function app() {
     loadedModelKey: null,
     clearingCache: false,
     resolutionStep: 8,
+    cropRect: null,          // { left, top, width, height } in source pixels; null = no crop
+    _showCropModal: false,
 
     async init() {
       Layout.init();
@@ -199,6 +201,7 @@ function app() {
       window.addEventListener('set-source-image', (e) => {
         const { name, url, width, height } = e.detail;
         this.sourceImage = { name, url, width, height };
+        this.cropRect = { left: 0, top: 0, width, height };
         this.lockAspectRatio = true;
         this._aspectRatioValue = width / height;
         this._conformResolution('incoming', { width, height });
@@ -334,6 +337,15 @@ function app() {
         batch.init_image = this.sourceImage.name;
         batch.strength = this.sourceStrength;
       }
+      if (this.sourceImage && this.cropRect) {
+        const q = this._quantizedCropRect();
+        if (q) {
+          batch.crop_left   = q.left / this.sourceImage.width;
+          batch.crop_top    = q.top / this.sourceImage.height;
+          batch.crop_width  = q.width / this.sourceImage.width;
+          batch.crop_height = q.height / this.sourceImage.height;
+        }
+      }
       return { prepend, batch };
     },
 
@@ -408,6 +420,7 @@ function app() {
               width: data.width,
               height: data.height,
             };
+            this.cropRect = { left: 0, top: 0, width: data.width, height: data.height };
             this.lockAspectRatio = true;
             this._aspectRatioValue = data.width / data.height;
             this._conformResolution('incoming', { width: data.width, height: data.height });
@@ -422,10 +435,181 @@ function app() {
 
     clearSourceImage() {
       this.sourceImage = null;
+      this.cropRect = null;
       this.lockAspectRatio = false;
       this._aspectRatioValue = null;
       this.selectedAspectRatio = 'custom';
       this._setBothWidthAndHeight(512, 512);
+    },
+
+    // ----------------------------------------------------------------
+    // Crop modal
+    // ----------------------------------------------------------------
+
+    openCropModal() {
+      this._showCropModal = true;
+    },
+
+    closeCropModal() {
+      this._showCropModal = false;
+      this._cropDragState = null;
+    },
+
+    _quantizedCropRect() {
+      if (!this.cropRect) return null;
+      const s = this.resolutionStep;
+      const { left, top, width, height } = this.cropRect;
+      const cx = left + width / 2;
+      const cy = top + height / 2;
+      const qw = Math.max(64, Math.round(width / s) * s);
+      const qh = Math.max(64, Math.round(height / s) * s);
+      return {
+        left: cx - qw / 2,
+        top: cy - qh / 2,
+        width: qw,
+        height: qh,
+      };
+    },
+
+    _cropDisplayScale() {
+      const img = this.$refs?.cropImg;
+      if (!img || !this.sourceImage) return 1;
+      return img.clientWidth / this.sourceImage.width;
+    },
+
+    _scaledRect(rect) {
+      if (!rect || !this.sourceImage) return null;
+      const scale = this._cropDisplayScale();
+      return {
+        left: rect.left * scale,
+        top: rect.top * scale,
+        width: rect.width * scale,
+        height: rect.height * scale,
+      };
+    },
+
+    _cropHandleAttrs(handle) {
+      const r = this._scaledRect(this.cropRect);
+      if (!r) return { display: 'none' };
+      const hs = 10;
+      const half = hs / 2;
+      const pos = {
+        nw: { x: r.left - half, y: r.top - half, cursor: 'nwse-resize' },
+        ne: { x: r.left + r.width - half, y: r.top - half, cursor: 'nesw-resize' },
+        sw: { x: r.left - half, y: r.top + r.height - half, cursor: 'nesw-resize' },
+        se: { x: r.left + r.width - half, y: r.top + r.height - half, cursor: 'nwse-resize' },
+        n:  { x: r.left + r.width / 2 - half, y: r.top - half, cursor: 'ns-resize' },
+        s:  { x: r.left + r.width / 2 - half, y: r.top + r.height - half, cursor: 'ns-resize' },
+        e:  { x: r.left + r.width - half, y: r.top + r.height / 2 - half, cursor: 'ew-resize' },
+        w:  { x: r.left - half, y: r.top + r.height / 2 - half, cursor: 'ew-resize' },
+      };
+      const p = pos[handle] || pos.se;
+      return { x: p.x, y: p.y, width: hs, height: hs, cursor: p.cursor };
+    },
+
+    cropFreeAttrs() {
+      const r = this._scaledRect(this.cropRect);
+      return r ? { x: r.left, y: r.top, width: r.width, height: r.height } : { display: 'none' };
+    },
+
+    cropQuantizedAttrs() {
+      const q = this._quantizedCropRect();
+      const r = this._scaledRect(q);
+      return r ? { x: r.left, y: r.top, width: r.width, height: r.height } : { display: 'none' };
+    },
+
+    onCropMouseDown(e) {
+      const handle = e.target.dataset.handle;
+      const rect = this.cropRect;
+      if (!rect || !this.sourceImage) return;
+
+      const container = this.$refs.cropContainer;
+      const cr = container.getBoundingClientRect();
+      const scale = this._cropDisplayScale();
+      const mx = (e.clientX - cr.left) / scale;
+      const my = (e.clientY - cr.top) / scale;
+
+      if (handle) {
+        this._cropDragState = { type: 'resize', handle, startX: mx, startY: my, startRect: { ...rect } };
+      } else {
+        this._cropDragState = { type: 'drag', startX: mx, startY: my, startRect: { ...rect } };
+      }
+
+      this._cropMoveHandler = (ev) => this._onCropMouseMove(ev);
+      this._cropUpHandler = () => this._onCropMouseUp();
+      document.addEventListener('mousemove', this._cropMoveHandler);
+      document.addEventListener('mouseup', this._cropUpHandler);
+    },
+
+    _onCropMouseMove(e) {
+      const state = this._cropDragState;
+      if (!state) return;
+      const container = this.$refs.cropContainer;
+      const cr = container.getBoundingClientRect();
+      const scale = this._cropDisplayScale();
+      const mx = (e.clientX - cr.left) / scale;
+      const my = (e.clientY - cr.top) / scale;
+      const dx = mx - state.startX;
+      const dy = my - state.startY;
+      const r = state.startRect;
+
+      let newRect;
+      if (state.type === 'drag') {
+        newRect = {
+          left: Math.max(0, Math.min(r.left + dx, this.sourceImage.width - r.width)),
+          top: Math.max(0, Math.min(r.top + dy, this.sourceImage.height - r.height)),
+          width: r.width,
+          height: r.height,
+        };
+      } else {
+        newRect = this._computeResizeRect(r, state.handle, dx, dy);
+      }
+      this.cropRect = newRect;
+    },
+
+    _onCropMouseUp() {
+      this._cropDragState = null;
+      if (this._cropMoveHandler) {
+        document.removeEventListener('mousemove', this._cropMoveHandler);
+        document.removeEventListener('mouseup', this._cropUpHandler);
+        this._cropMoveHandler = null;
+        this._cropUpHandler = null;
+      }
+    },
+
+    _computeResizeRect(r, handle, dx, dy) {
+      let { left, top, width, height } = r;
+      const minSize = 64;
+      const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+
+      switch (handle) {
+        case 'nw': left += dx; top += dy; width -= dx; height -= dy; break;
+        case 'ne': top += dy; width += dx; height -= dy; break;
+        case 'sw': left += dx; width -= dx; height += dy; break;
+        case 'se': width += dx; height += dy; break;
+        case 'n':  top += dy; height -= dy; break;
+        case 's':  height += dy; break;
+        case 'w':  left += dx; width -= dx; break;
+        case 'e':  width += dx; break;
+      }
+
+      if (width < minSize) {
+        if (handle === 'nw' || handle === 'sw' || handle === 'w') left -= minSize - width;
+        width = minSize;
+      }
+      if (height < minSize) {
+        if (handle === 'nw' || handle === 'ne' || handle === 'n') top -= minSize - height;
+        height = minSize;
+      }
+
+      const sw = this.sourceImage.width;
+      const sh = this.sourceImage.height;
+      left = clamp(left, 0, sw - width);
+      top = clamp(top, 0, sh - height);
+      width = clamp(width, minSize, sw);
+      height = clamp(height, minSize, sh);
+
+      return { left, top, width, height };
     },
 
     // ----------------------------------------------------------------

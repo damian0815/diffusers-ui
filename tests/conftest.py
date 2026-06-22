@@ -167,6 +167,7 @@ def make_enqueue_body(**overrides) -> dict:
             cfg_rescale_multiplier=0.0,
             sampler="euler_a",
             model_key="test_model",
+            board_id="test_board",
         ),
     )
     defaults.update(overrides)

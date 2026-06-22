@@ -12,7 +12,11 @@ async def enqueue_one(client, **overrides) -> dict:
         json=make_enqueue_body(**overrides),
     )
     assert resp.status_code == 200
-    return resp.json()
+    data = resp.json()
+    # Normalise: API returns {"items": [...]}, tests use item_ids
+    if "items" in data and "item_ids" not in data:
+        data["item_ids"] = [it["item_id"] for it in data["items"]]
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -76,11 +80,8 @@ async def test_prune_queue(client):
 
 @pytest.mark.asyncio
 async def test_enqueue_prepend(client):
-    body = make_enqueue_body()
-    body["prepend"] = True
-    resp = await client.post("/api/v1/queue/default/enqueue_batch", json=body)
-    assert resp.status_code == 200
-    assert len(resp.json()["item_ids"]) == 1
+    data = await enqueue_one(client, prepend=True)
+    assert len(data["item_ids"]) == 1
 
 
 @pytest.mark.asyncio
@@ -91,4 +92,64 @@ async def test_list_queue(client):
     data = resp.json()
     assert "items" in data
     assert len(data["items"]) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Crop params tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_enqueue_with_crop_params(client):
+    """Enqueue with crop params — verify 200 response."""
+    data = await enqueue_one(client, batch=dict(
+        prompt="crop test",
+        model_key="test_model",
+        board_id="test_board",
+        init_image="dummy.png",
+        strength=0.8,
+        crop_left=0.1,
+        crop_top=0.2,
+        crop_width=0.5,
+        crop_height=0.6,
+    ))
+    assert len(data["item_ids"]) == 1
+    assert data["items"][0]["crop_left"] == 0.1
+    assert data["items"][0]["crop_top"] == 0.2
+    assert data["items"][0]["crop_width"] == 0.5
+    assert data["items"][0]["crop_height"] == 0.6
+
+
+@pytest.mark.asyncio
+async def test_enqueue_without_crop_params_defaults(client):
+    """Enqueue without crop params — verify default 0.0 values in queue item."""
+    data = await enqueue_one(client, batch=dict(
+        prompt="no crop",
+        model_key="test_model",
+        board_id="test_board",
+    ))
+    assert data["items"][0]["crop_left"] == 0.0
+    assert data["items"][0]["crop_top"] == 0.0
+    assert data["items"][0]["crop_width"] == 0.0
+    assert data["items"][0]["crop_height"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_img2img_crop_backward_compat(client):
+    """Enqueue with init_image but no crop params — still works (all 0 defaults)."""
+    import PIL.Image as PILImage
+    from backend.config import settings
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    src_img = PILImage.new("RGB", (256, 256), "blue")
+    src_name = "backward_compat.png"
+    src_img.save(settings.images_dir / src_name)
+
+    data = await enqueue_one(client, batch=dict(
+        prompt="backward compat",
+        model_key="test_model",
+        board_id="test_board",
+        init_image=src_name,
+        strength=0.75,
+    ))
+    assert len(data["item_ids"]) == 1
+    assert data["items"][0]["crop_width"] == 0.0
 
