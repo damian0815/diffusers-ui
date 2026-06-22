@@ -98,9 +98,7 @@
           <!-- Img2img source -->
            <div class="field-group" x-show="sourceImage" style="margin-top:8px">
              <div class="img2img-row">
-               <div class="img2img-thumb">
-                 <img :src="sourceImage?.url">
-               </div>
+                <div class="img2img-thumb" :style="_thumbnailBgStyle()"></div>
                 <div class="img2img-controls">
                   <button class="icon-btn sm" @click="clearSourceImage()" title="Remove">✕</button>
                   <button class="icon-btn sm" @click="openCropModal()" title="Edit crop rectangle">✂️</button>

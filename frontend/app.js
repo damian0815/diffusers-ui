@@ -540,6 +540,32 @@ function app() {
       };
     },
 
+    // Return inline style for the left-panel thumbnail so only the
+    // crop‑rect portion of the source image is visible.
+    // When there is no crop (full‑image) we fall back to cover/center.
+    _thumbnailBgStyle() {
+      if (!this.sourceImage) return {};
+      const s = this.sourceImage;
+      if (!this.cropRect
+        || (this.cropRect.left === 0 && this.cropRect.top === 0
+            && this.cropRect.width === s.width && this.cropRect.height === s.height)) {
+        return {
+          backgroundImage: `url(${s.url})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+        };
+      }
+      const c = this.cropRect;
+      const scale = Math.min(48 / c.width, 48 / c.height);
+      return {
+        backgroundImage: `url(${s.url})`,
+        backgroundSize: `${s.width * scale}px ${s.height * scale}px`,
+        backgroundPosition: `${-c.left * scale + (48 - c.width * scale) / 2}px ${-c.top * scale + (48 - c.height * scale) / 2}px`,
+        backgroundRepeat: 'no-repeat',
+      };
+    },
+
     _cropDisplayScale() {
       const img = this.$refs?.cropImg;
       if (!img || !this.sourceImage) return 1;

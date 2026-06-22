@@ -339,10 +339,15 @@ class PipelineWorker:
                     if params.init_image:
                         import PIL.Image as PILImage_
                         init_path = settings.images_dir / params.init_image
+                        logger.warning("crop: init_path=%s exists=%s", init_path, init_path.exists())
                         init_pil = PILImage_.open(init_path).convert("RGB")
+                        logger.warning("crop: init_pil loaded size=%s mode=%s", init_pil.size, init_pil.mode)
                         if params.crop_width > 0:
                             src_w, src_h = init_pil.size
                             out_w, out_h = params.width, params.height
+                            logger.warning("crop: entering crop branch crop=(%s,%s,%s,%s) out=%sx%s src=%sx%s",
+                                        params.crop_left, params.crop_top, params.crop_width, params.crop_height,
+                                        out_w, out_h, src_w, src_h)
                             rough_w = min(params.crop_width * 1.2, 1.0)
                             rough_h = min(params.crop_height * 1.2, 1.0)
                             rough_l = max(params.crop_left - (rough_w - params.crop_width) / 2, 0.0)
@@ -360,8 +365,10 @@ class PipelineWorker:
                             x0 = (rough_out_w - out_w) // 2
                             y0 = (rough_out_h - out_h) // 2
                             init_pil = init_pil.crop((x0, y0, x0 + out_w, y0 + out_h))
+                            logger.warning("crop: after crop branch final size=%s", init_pil.size)
                         else:
                             init_pil = init_pil.resize((params.width, params.height), PILImage.LANCZOS)
+                            logger.warning("crop: after direct resize final size=%s", init_pil.size)
                         if is_sana:
                             # Pre-compute truncated timesteps.
                             pipeline.scheduler.set_timesteps(params.steps, device=pipeline._execution_device)
@@ -370,6 +377,9 @@ class PipelineWorker:
                             order = getattr(pipeline.scheduler, 'order', 1)
                             pipeline._img2img_timesteps = pipeline.scheduler.timesteps[t_start * order:]
                             pipeline._img2img_image = init_pil
+                            logger.warning("crop: SANA img2img set _img2img_image=%s timesteps=%s",
+                                        init_pil.size if init_pil else None,
+                                        pipeline._img2img_timesteps.shape if hasattr(pipeline._img2img_timesteps, 'shape') else len(pipeline._img2img_timesteps))
 
                             # Patch scheduler.set_timesteps so that after
                             # retrieve_timesteps() generates the full schedule
@@ -413,6 +423,7 @@ class PipelineWorker:
                             # SanaPipeline doesn't accept this argument.
                             call_kwargs['guidance_rescale'] = params.cfg_rescale_multiplier
                     try:
+                        logger.warning(f"running pipeline with kwargs {call_kwargs}")
                         return pipeline(**call_kwargs)
                     finally:
                         if _img2img_cleanup is not None:

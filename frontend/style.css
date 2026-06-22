@@ -1074,11 +1074,7 @@ select option { background: var(--surface); }
   background: var(--surface);
   border: 1px solid var(--border);
 }
-.img2img-thumb img {
-  width: 100%; height: 100%;
-  object-fit: cover;
-  display: block;
-}
+
 .img2img-controls {
   display: flex;
   flex-direction: column;
