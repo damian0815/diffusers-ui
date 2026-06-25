@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.gallery.db import get_session
-from backend.gallery.service import GalleryService, GalleryNotFoundError
+from backend.gallery.service import GalleryService, GalleryNotFoundError, IMG2IMG_BOARD_NAME
 
 router = APIRouter(prefix="/api/v1/boards", tags=["boards"])
 
@@ -56,6 +56,17 @@ async def delete_board(
 ):
     """Delete a gallery, optionally including all its images."""
     service = GalleryService(session)
+
+    # Protect the img2img source-image board — it stores files needed for
+    # restoring old img2img generations via adoptSettings('all').
+    gallery = await service.get_gallery(board_id)
+    if gallery and gallery.name == IMG2IMG_BOARD_NAME:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Board {IMG2IMG_BOARD_NAME!r} cannot be deleted because it stores source images "
+                   f"needed for restoring old img2img generations.  Delete the images within it first.",
+        )
+
     deleted_images = []
     try:
         deleted_images = await service.delete_gallery(board_id, include_images=include_images)

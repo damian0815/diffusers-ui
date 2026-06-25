@@ -56,6 +56,12 @@ async def lifespan(app: FastAPI):
     default_board_id = await _ensure_default_gallery()
     worker._default_board_id = default_board_id
 
+    # Ensure the img2img source-image board exists (created lazily by
+    # record_image too, but eager creation documents the intent).
+    from backend.gallery.service import GalleryService, IMG2IMG_BOARD_NAME
+    img2img_board_id = await GalleryService.ensure_img2img_board()
+    logger.info("Img2img source board (%r) id: %s", IMG2IMG_BOARD_NAME, img2img_board_id)
+
     logger.info("Detected device: %s", settings.device)
     logger.info("Default gallery board_id: %s", default_board_id)
 

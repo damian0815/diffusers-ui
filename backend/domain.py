@@ -32,6 +32,8 @@ class ImageGenerationParams:
     prediction_type: str = 'default'  # 'default' = don't override; else e.g. 'epsilon', 'v_prediction', 'flow_prediction'
     init_image: str | None = None   # image_name from gallery, or uploaded filename
     strength: float = 0.75          # 0.0–1.0 how much noise to add
+    source_width: int | None = None   # pixel dimensions of the init_image
+    source_height: int | None = None
     crop_left: float = 0.0          # normalized 0-1 crop rect
     crop_top: float = 0.0
     crop_width: float = 0.0         # 0 = no crop (backward compat)

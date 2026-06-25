@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import shutil
 import uuid
 
 from sqlalchemy import func, or_, select
@@ -9,6 +11,9 @@ from sqlalchemy.orm import selectinload
 from backend.config import settings
 from backend.domain import QueueItem
 from backend.gallery.models import Gallery, ImageRecord, Tag
+
+logger = logging.getLogger(__name__)
+IMG2IMG_BOARD_NAME = "Image To Image Sources"
 
 
 class GalleryNotFoundError(Exception):
@@ -97,7 +102,12 @@ class GalleryService:
         model_name: str,
         gen_seq: int | None = None,
     ) -> ImageRecord:
-        """Persist a generated image record in the given gallery."""
+        """Persist a generated image record in the given gallery.
+
+        If ``item.params.init_image`` is set (img2img), the source image file
+        is copied into a dedicated "Image To Image Sources" board so it has a
+        gallery DB record and will survive ``_cleanup_broken_images()``.
+        """
         gallery = await self.get_gallery(board_id)
         p = item.params
         record = ImageRecord(
@@ -115,11 +125,76 @@ class GalleryService:
             model_key=p.model_key,
             model_name=model_name,
             gen_seq=gen_seq,
+            source_width=p.source_width,
+            source_height=p.source_height,
+            strength=p.strength,
+            crop_left=p.crop_left,
+            crop_top=p.crop_top,
+            crop_width=p.crop_width,
+            crop_height=p.crop_height,
         )
+
+        # Copy source image into dedicated img2img board for survival
+        if p.init_image:
+            try:
+                source_copy = await self._record_source_image(p.init_image)
+                record.source_image = source_copy
+            except Exception:
+                logger.exception("Failed to copy source image %r for img2img metadata", p.init_image)
+                record.source_image = None
+
         self._session.add(record)
         await self._session.flush()
         await self._session.refresh(record)
         return record
+
+    async def _record_source_image(self, source_name: str) -> str:
+        """Copy *source_name* into the img2img board and return the new filename."""
+        orig_path = settings.images_dir / source_name
+        if not orig_path.exists():
+            raise FileNotFoundError(f"Source image {source_name!r} not found at {orig_path}")
+        copy_name = f"source_{uuid.uuid4().hex}.png"
+        shutil.copyfile(str(orig_path), str(settings.images_dir / copy_name))
+
+        board_id = await self._ensure_img2img_board_same_session()
+        gallery = await self.get_gallery(board_id)
+        record = ImageRecord(
+            image_name=copy_name,
+            gallery_id=gallery.id if gallery else None,
+        )
+        self._session.add(record)
+        await self._session.flush()
+        return copy_name
+
+    async def _ensure_img2img_board_same_session(self) -> str:
+        """Return the board_id of the img2img board, creating it if needed,
+        using the current session (no separate DB transaction)."""
+        galleries = await self.list_galleries()
+        for g in galleries:
+            if g.name == IMG2IMG_BOARD_NAME:
+                return g.board_id
+        gallery = await self.create_gallery(IMG2IMG_BOARD_NAME)
+        return gallery.board_id
+
+    @staticmethod
+    async def ensure_img2img_board() -> str:
+        """Return the board_id of the img2img board, creating it if needed.
+
+        Uses a dedicated session.  Intended for startup / one-off calls (e.g.
+        from ``lifespan``).  For use within an existing service instance,
+        prefer ``_ensure_img2img_board_same_session()``.
+        """
+        from backend.gallery.db import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            service = GalleryService(session)
+            galleries = await service.list_galleries()
+            for g in galleries:
+                if g.name == IMG2IMG_BOARD_NAME:
+                    await session.commit()
+                    return g.board_id
+            gallery = await service.create_gallery(IMG2IMG_BOARD_NAME)
+            await session.commit()
+            return gallery.board_id
 
     async def get_image(self, image_name: str) -> ImageRecord | None:
         result = await self._session.execute(

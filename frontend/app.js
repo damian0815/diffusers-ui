@@ -336,6 +336,8 @@ function app() {
       if (this.sourceImage) {
         batch.init_image = this.sourceImage.name;
         batch.strength = this.sourceStrength;
+        batch.source_width = this.sourceImage.width;
+        batch.source_height = this.sourceImage.height;
       }
       if (this.sourceImage && this.cropRect) {
         const q = this._quantizedCropRect();
@@ -728,6 +730,33 @@ function app() {
       if (what === 'all' || what === 'model')   { this.modelKey = meta.model_key || this.modelKey; }
       if (what === 'all' || what === 'seed')    { this.seed = meta.seed; }
       if (what === 'all' || what === 'steps')   { this.steps = meta.steps; this.cfg = meta.cfg; this.cfgRescale = meta.cfg_rescale_multiplier; this.sampler = meta.sampler; this.predictionType = meta.prediction_type || 'default'; }
+      if (what === 'all' && meta.source_image) {
+        this.sourceImage = {
+          name: meta.source_image,
+          url: `/api/v1/images/i/${meta.source_image}/full`,
+          width: meta.source_width || 512,
+          height: meta.source_height || 512,
+        };
+        this.sourceStrength = meta.strength ?? 0.75;
+        if (meta.crop_width > 0) {
+          this.cropRect = {
+            left: Math.round(meta.crop_left * meta.source_width),
+            top: Math.round(meta.crop_top * meta.source_height),
+            width: Math.round(meta.crop_width * meta.source_width),
+            height: Math.round(meta.crop_height * meta.source_height),
+          };
+        } else {
+          this.cropRect = {
+            left: 0,
+            top: 0,
+            width: meta.source_width || 512,
+            height: meta.source_height || 512,
+          };
+        }
+      } else if (what === 'all') {
+        this.sourceImage = null;
+        this.cropRect = null;
+      }
     },
 
     selectImageFromEvent(event) {

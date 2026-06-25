@@ -202,5 +202,13 @@ def _image_record_to_dict(record) -> dict:
         "gen_seq": record.gen_seq,
         "created_at": record.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if record.created_at else None,
         "tags": [t.name for t in record.tags],
+        "source_image": record.source_image,
+        "source_width": record.source_width,
+        "source_height": record.source_height,
+        "strength": record.strength,
+        "crop_left": record.crop_left,
+        "crop_top": record.crop_top,
+        "crop_width": record.crop_width,
+        "crop_height": record.crop_height,
     }
 

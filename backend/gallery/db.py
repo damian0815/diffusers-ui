@@ -27,6 +27,18 @@ def _apply_inline_migrations(conn) -> None:
             conn.execute(text("ALTER TABLE images ADD COLUMN gen_seq INTEGER"))
         if "prediction_type" not in existing:
             conn.execute(text("ALTER TABLE images ADD COLUMN prediction_type VARCHAR DEFAULT 'default'"))
+        for col, coltype in [
+            ("source_image", "VARCHAR"),
+            ("source_width", "INTEGER"),
+            ("source_height", "INTEGER"),
+            ("strength", "FLOAT DEFAULT 0.75"),
+            ("crop_left", "FLOAT DEFAULT 0.0"),
+            ("crop_top", "FLOAT DEFAULT 0.0"),
+            ("crop_width", "FLOAT DEFAULT 0.0"),
+            ("crop_height", "FLOAT DEFAULT 0.0"),
+        ]:
+            if col not in existing:
+                conn.execute(text(f"ALTER TABLE images ADD COLUMN {col} {coltype}"))
     if "queue_items" in tables:
         existing = {c["name"] for c in inspector.get_columns("queue_items")}
         if "board_id" not in existing:

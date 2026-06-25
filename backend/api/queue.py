@@ -30,6 +30,8 @@ class BatchParams(BaseModel):
     count: int = 1  # number of items to enqueue; seed is auto-incremented for each
     init_image: str | None = None
     strength: float = 0.75
+    source_width: int | None = None
+    source_height: int | None = None
     crop_left: float = 0.0
     crop_top: float = 0.0
     crop_width: float = 0.0
@@ -262,6 +264,8 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
             board_id=batch.board_id,
             init_image=batch.init_image,
             strength=batch.strength,
+            source_width=batch.source_width,
+            source_height=batch.source_height,
             crop_left=batch.crop_left,
             crop_top=batch.crop_top,
             crop_width=batch.crop_width,
@@ -436,6 +440,10 @@ def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
         "model_key": p.model_key,
         "model_name": model_name,
         "board_id": p.board_id,
+        "init_image": p.init_image,
+        "strength": p.strength,
+        "source_width": p.source_width,
+        "source_height": p.source_height,
         "crop_left": p.crop_left,
         "crop_top": p.crop_top,
         "crop_width": p.crop_width,

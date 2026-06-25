@@ -550,13 +550,13 @@
                      :alt="img.prompt" loading="lazy">
                 <span x-show="img.starred" class="star-badge">⭐</span>
                 <div class="thumb-actions">
+                  <button class="thumb-action-btn danger"
+                          @click.stop="deleteImage(img.image_name)"
+                          title="Delete">🗑</button>
                   <button class="thumb-action-btn"
                           @click.stop="starImage(img.image_name, !img.starred)"
                           :title="img.starred ? 'Unstar' : 'Star'"
                           x-text="img.starred ? '⭐' : '☆'"></button>
-                  <button class="thumb-action-btn danger"
-                          @click.stop="deleteImage(img.image_name)"
-                          title="Delete">🗑</button>
                 </div>
               </div>
             </template>

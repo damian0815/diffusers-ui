@@ -59,6 +59,16 @@ class ImageRecord(Base):
     # NULL for images created before this column was added.
     gen_seq = Column(Integer, nullable=True, index=True)
 
+    # Img2img / source image metadata (nullable for backward compat)
+    source_image = Column(String, nullable=True)
+    source_width = Column(Integer, nullable=True)
+    source_height = Column(Integer, nullable=True)
+    strength = Column(Float, default=0.75)
+    crop_left = Column(Float, default=0.0)
+    crop_top = Column(Float, default=0.0)
+    crop_width = Column(Float, default=0.0)
+    crop_height = Column(Float, default=0.0)
+
     starred = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     tags = relationship("Tag", secondary=image_tags, back_populates="images")
