@@ -80,6 +80,12 @@
                   @click="cancelGeneration()"
                   x-show="isGenerating"
                   title="Cancel current generation">✕</button>
+          <button class="icon-btn sm"
+                  @click="togglePause()"
+                  x-show="!isGenerating"
+                  title="Pause / resume batch processing">
+            <span x-text="isPaused ? '▶' : '⏸'"></span>
+          </button>
           <button class="icon-btn generate-priority" @click="generate(true)"
                   :disabled="isEnqueuing"
                   title="Front of queue  ·  ⌘⇧↩">⏫</button>
@@ -658,6 +664,13 @@
               title="Model currently in memory"></span>
       </div>
       <div class="fs-header-actions">
+        <label class="field max-batch-field" title="Max items per batch (0 = auto)">
+          <span style="font-size:12px;color:var(--text-dim);margin-right:4px">Batch:</span>
+          <input type="number" min="0" max="64" step="1"
+                 style="width:44px;text-align:center"
+                 x-model.number="maxBatchSize"
+                 @change="setMaxBatchSize(maxBatchSize)">
+        </label>
         <button class="btn-secondary" @click="loadQueueDetails()" title="Refresh">↻ Refresh</button>
         <button class="btn-secondary" @click="pruneQueue()" title="Remove completed/failed rows">Prune done</button>
         <button class="btn-secondary danger" @click="clearQueue()" title="Cancel all pending">Clear pending</button>

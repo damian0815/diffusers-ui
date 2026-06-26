@@ -14,7 +14,7 @@ from diffusers import SanaPAGPipeline
 
 from backend.config import settings
 from backend.domain import GenerationCancelled, QueueItem, ItemStatus
-from backend.pipeline.batcher import group_into_batches
+from backend.pipeline.batcher import get_critical_params
 from backend.pipeline.preview import latents_to_preview_image, PreviewBroadcaster
 from backend.pipeline.compel_encoder import build_prompt_embeds
 from backend.pipeline.mem_stats import MemoryAdvisor
@@ -112,6 +112,10 @@ class PipelineWorker:
         # _idle is SET when no generation is in flight; CLEARED while running one.
         self._idle = asyncio.Event()
         self._idle.set()
+        # _paused is SET when the worker may pick up new work; CLEARED on pause.
+        # The current batch always finishes before pausing takes effect.
+        self._paused = asyncio.Event()
+        self._paused.set()
         # Thread-safe event signalled by cancel_generation() and checked in the
         # pipeline step callback (which runs in a thread-pool thread).
         self._cancel_event = threading.Event()
@@ -120,27 +124,48 @@ class PipelineWorker:
         self._mem_advisor = MemoryAdvisor(device=settings.device)
 
     async def run(self) -> None:
-        """Main loop — drains queue continuously until stopped."""
+        """
+        Main loop — scan the full queue depth to find compatible items and
+        batch them together, then run inference.
+        """
         self._running = True
         while self._running:
+            # Pause before dequeuing the next batch (current batch always
+            # completes first).
+            await self._paused.wait()
+
             try:
-                items = await self._queue.next_pending_batch_window(settings.batch_window_s, limit=2)
+                # Get exactly one item (blocks until available).
+                items = await self._queue.next_pending_batch_window(0, limit=1)
             except asyncio.CancelledError:
                 break
             if not items:
                 continue
-            def _max_size_fn(crit):
-                return self._mem_advisor.get_max_batch_size(crit.width * crit.height)
-            for batch in group_into_batches(items, max_size=_max_size_fn):
-                if not self._running:
-                    break
-                self._idle.clear()
-                try:
-                    _ = await self._run_batch(batch)
-                except Exception:
-                    logger.exception("Unhandled error in batch, continuing.")
-                finally:
-                    self._idle.set()
+
+            pivot = items[0]
+
+            if pivot.priority:
+                batch = [pivot]
+            else:
+                crit = get_critical_params(pivot.params)
+                max_bs = self._mem_advisor.get_max_batch_size(crit.width * crit.height)
+                batch = [pivot]
+                if max_bs > 1:
+                    rest = await self._queue.dequeue_matching(
+                        lambda item, _crit=crit: get_critical_params(item.params) == _crit,
+                        max_bs - 1,
+                    )
+                    batch.extend(rest)
+
+            if not self._running:
+                break
+            self._idle.clear()
+            try:
+                _ = await self._run_batch(batch)
+            except Exception:
+                logger.exception("Unhandled error in batch, continuing.")
+            finally:
+                self._idle.set()
 
     async def stop(self) -> None:
         """Signal the worker to stop and unblock any queue wait."""
@@ -155,6 +180,31 @@ class PipelineWorker:
     def is_idle(self) -> bool:
         """True when no generation is currently in flight."""
         return self._idle.is_set()
+
+    @property
+    def is_paused(self) -> bool:
+        """True when the worker is paused (won't start new batches)."""
+        return not self._paused.is_set()
+
+    def pause(self) -> None:
+        """Pause the worker after the current batch finishes."""
+        self._paused.clear()
+        logger.info("Worker paused — will not pick up new batches.")
+
+    def resume(self) -> None:
+        """Resume the worker so it picks up queued items again."""
+        self._paused.set()
+        logger.info("Worker resumed.")
+
+    @property
+    def max_batch_size(self) -> int:
+        """Current user-set cap on batch size (0 = auto)."""
+        return self._mem_advisor.max_batch_size_override
+
+    def set_max_batch_size(self, n: int) -> None:
+        """Set a user cap on batch size (0 = auto, let the advisor decide)."""
+        self._mem_advisor.max_batch_size_override = n
+        logger.info("Max batch size set to %d%s", n, "" if n else " (auto)")
 
     def cancel_generation(self) -> None:
         """Request that the current in-flight generation be aborted.
@@ -423,7 +473,7 @@ class PipelineWorker:
                             # SanaPipeline doesn't accept this argument.
                             call_kwargs['guidance_rescale'] = params.cfg_rescale_multiplier
                     try:
-                        logger.warning(f"running pipeline with kwargs {call_kwargs}")
+                        #logger.warning(f"running pipeline with kwargs {call_kwargs}")
                         return pipeline(**call_kwargs)
                     finally:
                         if _img2img_cleanup is not None:

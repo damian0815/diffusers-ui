@@ -47,8 +47,6 @@ def group_into_batches(
         key = get_critical_params(item.params)
         seen.setdefault(key, []).append(item)
 
-    result: list[list[QueueItem]] = []
-
     # ── Priority items: each runs as its own solo batch (no grouping) ──────────
     # They are placed first so they execute before any normal-priority work that
     # was already in the window.

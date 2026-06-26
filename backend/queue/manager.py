@@ -119,6 +119,35 @@ class QueueManager:
                 self._new_item_event.set()
         return collected
 
+    async def dequeue_matching(
+        self,
+        predicate,
+        limit: int,
+    ) -> list[QueueItem]:
+        """
+        Scan the entire queue without waiting, and remove up to *limit*
+        pending items for which *predicate(item)* returns True.
+
+        Non-matching pending items stay in their original order.
+        Non-pending items are silently dropped.
+        """
+        async with self._lock:
+            collected: list[QueueItem] = []
+            remaining: deque[QueueItem] = deque()
+            while self._queue and len(collected) < limit:
+                item = self._queue.popleft()
+                if item.status == ItemStatus.PENDING and predicate(item):
+                    collected.append(item)
+                elif item.status == ItemStatus.PENDING:
+                    remaining.append(item)
+            remaining.extend(self._queue)
+            self._queue = remaining
+            if not self._queue:
+                self._new_item_event.clear()
+            else:
+                self._new_item_event.set()
+        return collected
+
     def abort_wait(self) -> None:
         """Unblock any coroutine waiting in next_pending_batch_window (for shutdown)."""
         self._shutting_down = True

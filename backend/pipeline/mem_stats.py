@@ -161,6 +161,9 @@ class MemoryAdvisor:
         self._device = device
         self._records: list[MemRecord] = []
         self._probe_batch_size: int = 1   # ramp up 1 → 2 → 3 … on success
+        self._gen_count_at_current_batch_size: int = 0  # consecutive successes at this probe
+        self._has_oomed: bool = False     # True after first OOM; switches to slow ramp-up
+        self._max_batch_size_override: int = 0  # 0 = no override; >0 caps probe
         self._best_k: int = 1             # current best scaling exponent
         self._best_a: float = 0.0         # coefficient for best model
 
@@ -186,12 +189,26 @@ class MemoryAdvisor:
 
         Always ≥ 1.  Combines the probe ramp-up guard with the model-based
         VRAM prediction (the latter is only active once enough samples exist).
+        If ``max_batch_size_override > 0`` it caps the result.
         """
         probe = self._probe_batch_size
         model_lim = self._model_limit(pixel_area)  # 0 = not enough data yet
         if model_lim > 0:
-            return max(1, min(probe, model_lim))
-        return max(1, probe)
+            result = max(1, min(probe, model_lim))
+        else:
+            result = max(1, probe)
+        if self._max_batch_size_override > 0:
+            result = min(result, self._max_batch_size_override)
+        return result
+
+    @property
+    def max_batch_size_override(self) -> int:
+        """User-set cap on batch size (0 = auto)."""
+        return self._max_batch_size_override
+
+    @max_batch_size_override.setter
+    def max_batch_size_override(self, value: int) -> None:
+        self._max_batch_size_override = max(0, value)
 
     def record_success(
         self,
@@ -201,17 +218,33 @@ class MemoryAdvisor:
     ) -> None:
         """Record a successful inference run.
 
-        Advances the probe batch size by 1 (if *batch_size* ≥ current probe),
-        updates the power-law model, and logs a fit report.
+        Advances the probe batch size by 1 only after >100 consecutive
+        successful generations at the current probe size, updates the
+        power-law model, and logs a fit report.
         """
         if peak_bytes > 0:
             self._records.append(MemRecord(pixel_area, batch_size, peak_bytes))
             if len(self._records) >= MIN_SAMPLES:
                 self._refit()
 
-        # Always advance the probe — even in CPU / no-VRAM-counter mode.
         if batch_size >= self._probe_batch_size:
-            self._probe_batch_size = batch_size + 1
+            old = self._probe_batch_size
+            if not self._has_oomed:
+                self._probe_batch_size = batch_size + 1
+                logger.info(
+                    "MemoryAdvisor: batch_size probe %d → %d  (rapid ramp-up, pre-OOM)",
+                    old, self._probe_batch_size,
+                )
+            else:
+                self._gen_count_at_current_batch_size += 1
+                if self._gen_count_at_current_batch_size > 100:
+                    self._probe_batch_size = batch_size + 1
+                    logger.info(
+                        "MemoryAdvisor: batch_size probe %d → %d  (after %d consecutive successes at %d)",
+                        old, self._probe_batch_size,
+                        self._gen_count_at_current_batch_size, old,
+                    )
+                    self._gen_count_at_current_batch_size = 0
 
         self._log_report(pixel_area, batch_size, peak_bytes)
 
@@ -221,6 +254,7 @@ class MemoryAdvisor:
         Also useful to call from the OOM handler before requeueing so that
         the next attempt will use a smaller batch.
         """
+        self._has_oomed = True
         new_probe = max(1, failed_batch_size - 1)
         if new_probe < self._probe_batch_size:
             logger.warning(
@@ -229,6 +263,7 @@ class MemoryAdvisor:
                 new_probe,
             )
             self._probe_batch_size = new_probe
+        self._gen_count_at_current_batch_size = 0
 
     # ── internals ─────────────────────────────────────────────────────────────
 

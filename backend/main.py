@@ -5,6 +5,8 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+logging.getLogger().setLevel(logging.INFO)
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 

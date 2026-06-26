@@ -156,7 +156,15 @@ Return generation metadata for an image.
   "starred": false,
   "gen_seq": 42,
   "created_at": "2025-01-15 10:30:00.123456",
-  "tags": ["tag1", "tag2"]
+  "tags": ["tag1", "tag2"],
+  "source_image": null,
+  "source_width": null,
+  "source_height": null,
+  "strength": 0.75,
+  "crop_left": 0,
+  "crop_top": 0,
+  "crop_width": 0,
+  "crop_height": 0
 }
 ```
 
@@ -200,6 +208,21 @@ Remove a tag from an image.
 
 **Response** Full image record dict.
 
+### `POST /upload-source`
+
+Upload an image file (PNG/JPEG) to use as an img2img source image. Accepts multipart/form-data.
+
+**Body** `file` — image file (multipart upload)
+
+**Response**
+```json
+{
+  "image_name": "abc123.png",
+  "width": 1024,
+  "height": 768
+}
+```
+
 ---
 
 ## Queue
@@ -229,7 +252,15 @@ Enqueue one or more generation jobs. Accepts both the native flat format and the
     "prediction_type": "default",
     "model_key": "model-key",
     "board_id": "uuid",
-    "count": 1
+    "count": 1,
+    "init_image": null,
+    "strength": 0.75,
+    "source_width": null,
+    "source_height": null,
+    "crop_left": 0,
+    "crop_top": 0,
+    "crop_width": 0,
+    "crop_height": 0
   }
 }
 ```
@@ -247,14 +278,26 @@ When `seed == -1`, each item gets an independent random seed.
       "status": "pending",
       "image_name": null,
       "prompt": "a cat",
-      "model_key": "model-key",
-      "board_id": "uuid",
+      "negative_prompt": "",
       "seed": 12345,
       "width": 512,
       "height": 512,
       "steps": 20,
       "cfg": 7.5,
+      "cfg_rescale_multiplier": 0.0,
       "sampler": "dpmpp_2m",
+      "prediction_type": "default",
+      "model_key": "model-key",
+      "model_name": "Model Name",
+      "board_id": "uuid",
+      "init_image": null,
+      "strength": 0.75,
+      "source_width": null,
+      "source_height": null,
+      "crop_left": 0,
+      "crop_top": 0,
+      "crop_width": 0,
+      "crop_height": 0,
       "starred": false,
       "gen_seq": null,
       "created_at": null,
@@ -335,6 +378,60 @@ Clone a queue item (any status) and re-enqueue it.
   "item_id": 42,
   "resubmitted_from": 1
 }
+```
+
+### `PUT /cancel_current`
+
+Cancel the in-flight generation.
+
+**Response**
+```json
+{ "queue_id": "default", "cancelled_ids": [1] }
+```
+
+### `GET /status`
+
+Return worker status (paused state and max_batch_size setting).
+
+**Response**
+```json
+{
+  "queue_id": "default",
+  "paused": false,
+  "max_batch_size": 0
+}
+```
+
+### `PUT /pause`
+
+Pause batch processing after the current generation finishes.
+
+**Response**
+```json
+{ "queue_id": "default", "paused": true }
+```
+
+### `PUT /resume`
+
+Resume batch processing.
+
+**Response**
+```json
+{ "queue_id": "default", "paused": false }
+```
+
+### `PUT /max_batch_size`
+
+Set a user cap on batch size (0 = auto).
+
+**Body**
+```json
+{ "max_batch_size": 4 }
+```
+
+**Response**
+```json
+{ "queue_id": "default", "max_batch_size": 4 }
 ```
 
 ### `PUT /clear`
@@ -486,10 +583,20 @@ Live latent preview frames during generation.
 The server pushes JSON messages:
 ```json
 {
+  "type": "preview",
   "item_id": 1,
   "image_b64": "<base64-encoded JPEG>",
   "step": 5,
   "total_steps": 20
+}
+```
+
+Domain events are wrapped with a `type` and `event` field:
+```json
+{
+  "type": "event",
+  "event": "queue_item_completed",
+  "data": { "item_id": 1, "image_name": "abc123.png" }
 }
 ```
 
@@ -507,6 +614,9 @@ The server broadcasts these events via the shared broadcaster (all connected Web
 | `queue_item_completed` | `{item_id, image_name}` | job finished |
 | `queue_item_failed` | `{item_id, error}` | job failed |
 | `queue_item_cancelled` | `{item_id}` | job cancelled |
+| `worker_paused` | `{}` | worker paused after current batch |
+| `worker_resumed` | `{}` | worker resumed |
+| `image_created` | full image-record dict | image recorded to gallery |
 | `image_deleted` | `{image_name, board_id}` | image removed |
 | `images_moved` | `{image_names, source_board_id, target_board_id}` | images moved between galleries |
 | `board_created` | `{board_id, board_name, created_at}` | new gallery created |

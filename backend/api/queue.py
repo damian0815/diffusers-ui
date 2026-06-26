@@ -348,6 +348,46 @@ async def cancel_current_generation(queue_id: str, request: Request):
     return {"queue_id": queue_id, "cancelled_ids": cancelled_ids}
 
 
+@router.get("/status")
+async def worker_status(queue_id: str, request: Request):
+    """Return worker status (paused, max_batch_size)."""
+    worker = request.app.state.worker
+    return {
+        "queue_id": queue_id,
+        "paused": worker.is_paused,
+        "max_batch_size": worker.max_batch_size,
+    }
+
+
+@router.put("/pause")
+async def pause_queue(queue_id: str, request: Request):
+    """Pause batch processing after the current generation finishes."""
+    worker = request.app.state.worker
+    broadcaster = request.app.state.broadcaster
+    worker.pause()
+    await broadcaster.broadcast_event("worker_paused", {})
+    return {"queue_id": queue_id, "paused": True}
+
+
+@router.put("/resume")
+async def resume_queue(queue_id: str, request: Request):
+    """Resume batch processing."""
+    worker = request.app.state.worker
+    broadcaster = request.app.state.broadcaster
+    worker.resume()
+    await broadcaster.broadcast_event("worker_resumed", {})
+    return {"queue_id": queue_id, "paused": False}
+
+
+@router.put("/max_batch_size")
+async def set_max_batch_size(queue_id: str, request: Request, body: dict = Body(...)):
+    """Set a user cap on batch size (0 = auto)."""
+    worker = request.app.state.worker
+    n = int(body.get("max_batch_size", 0))
+    worker.set_max_batch_size(n)
+    return {"queue_id": queue_id, "max_batch_size": n}
+
+
 @router.put("/prune")
 async def prune_queue(queue_id: str, request: Request):
     """Remove completed/failed/cancelled items from tracking."""

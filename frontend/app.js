@@ -27,6 +27,8 @@ function app() {
     imageLoading: false,
     previewProgress: 0,
     isGenerating: false,       // true while at least one job is in-flight
+    isPaused: false,           // true when worker is paused (won't start new batches)
+    maxBatchSize: 0,           // user-set cap on batch size (0 = auto)
     isEnqueuing: false,        // true during the enqueue network request
     _previewDataUrl: null,     // latest live-preview data URL (null = no current frame)
     _currentDisplayName: null, // image_name currently shown (null when showing preview/nothing)
@@ -94,6 +96,7 @@ function app() {
       await this.loadModels();
       this._updateResolutionStep();
       this.setupKeyboardShortcuts();
+      this.loadWorkerStatus();
 
       // Initialise session-scoped state that can't be serialised as plain data
       this._finishedItemIds = new Set();
@@ -170,6 +173,10 @@ function app() {
           this._onItemFailed(data.item_id, data.error);
         } else if (event === 'queue_item_cancelled') {
           this._onItemFinished(data.item_id);
+        } else if (event === 'worker_paused') {
+          this.isPaused = true;
+        } else if (event === 'worker_resumed') {
+          this.isPaused = false;
         }
       });
 
@@ -862,6 +869,38 @@ function app() {
       } catch (e) {
         this._setError('Could not cancel generation.');
       }
+    },
+
+    async togglePause() {
+      try {
+        const method = this.isPaused ? 'resume' : 'pause';
+        await fetch(`/api/v1/queue/default/${method}`, { method: 'PUT' });
+        this.isPaused = !this.isPaused;
+      } catch (e) {
+        this._setError('Could not toggle pause.');
+      }
+    },
+
+    async loadWorkerStatus() {
+      try {
+        const resp = await fetch('/api/v1/queue/default/status');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        this.isPaused = data.paused;
+        this.maxBatchSize = data.max_batch_size;
+      } catch (e) {}
+    },
+
+    async setMaxBatchSize(n) {
+      const val = Math.max(0, parseInt(n) || 0);
+      try {
+        await fetch('/api/v1/queue/default/max_batch_size', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ max_batch_size: val }),
+        });
+        this.maxBatchSize = val;
+      } catch (e) { this._setError('Could not set max batch size.'); }
     },
 
     async loadQueueDetails() {
