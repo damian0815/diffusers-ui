@@ -1048,6 +1048,7 @@ select option { background: var(--surface); }
 .stat-pill.processing { background: rgba(129,140,248,0.12); color: var(--accent-hi); }
 .stat-pill.done       { background: rgba(52,211,153,0.12);  color: #34d399; }
 .stat-pill.failed     { background: var(--danger-bg);       color: var(--danger); }
+.stat-pill.vram       { background: rgba(148,163,184,0.10); color: #94a3b8; }
 
 /* ── Danger button variant ──────────────────────────────── */
 .btn-secondary.danger {

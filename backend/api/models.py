@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+import asyncio
 
 from backend.domain import ModelEntry
 from backend.model_registry.registry import ModelNotFoundError

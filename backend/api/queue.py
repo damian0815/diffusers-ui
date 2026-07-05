@@ -8,6 +8,8 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ValidationError
 
 from backend.domain import ImageGenerationParams, QueueItem
+from backend.config import settings
+from backend.pipeline.mem_stats import _current_bytes, _total_bytes
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/queue/{queue_id}", tags=["queue"])
@@ -350,12 +352,14 @@ async def cancel_current_generation(queue_id: str, request: Request):
 
 @router.get("/status")
 async def worker_status(queue_id: str, request: Request):
-    """Return worker status (paused, max_batch_size)."""
+    """Return worker status (paused, max_batch_size, VRAM stats)."""
     worker = request.app.state.worker
     return {
         "queue_id": queue_id,
         "paused": worker.is_paused,
         "max_batch_size": worker.max_batch_size,
+        "vram_used": _current_bytes(settings.device),
+        "vram_total": _total_bytes(settings.device),
     }
 
 

@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import json
 from pathlib import Path
 
 from backend.domain import ModelEntry
@@ -31,7 +34,7 @@ def scan_hf_cache() -> list[ModelEntry]:
                     ModelEntry(
                         key=repo.repo_id.replace("/", "--"),
                         name=repo.repo_id.split("/")[-1],
-                        base=_guess_base(repo.repo_id),
+                        base=_detect_base(Path(snapshot_path)),
                         source=repo.repo_id,
                         source_type="hf_repo_id",
                     )
@@ -57,7 +60,7 @@ def scan_local_dir(directory: Path) -> list[ModelEntry]:
                 ModelEntry(
                     key=str(child.resolve()),
                     name=child.name,
-                    base=_guess_base(child.name),
+                    base=_detect_base(child),
                     source=str(child.resolve()),
                     source_type="local_path",
                 )
@@ -70,8 +73,42 @@ def _looks_like_pipeline(path: Path) -> bool:
     return (path / "model_index.json").exists()
 
 
-def _guess_base(name: str) -> str:
-    """Heuristically guess the model base from the name/repo-id."""
+def _detect_base(pipeline_dir: Path) -> str:
+    """
+    Determine the model base by inspecting the pipeline's ``model_index.json``.
+    Falls back to heuristic name-based guessing if the file can't be read.
+    """
+    index_path = pipeline_dir / "model_index.json"
+    try:
+        with open(index_path) as f:
+            index = json.load(f)
+    except Exception:
+        return _guess_base_from_name(pipeline_dir.name)
+
+    # SANA pipelines use a transformer instead of a UNet
+    if "transformer" in index:
+        return "sana"
+
+    # SDXL has two text encoders; SD1/2 have only one
+    if "text_encoder_2" in index:
+        return "sdxl"
+
+    # SD1 vs SD2: check the unet config's cross_attention_dim
+    try:
+        unet_cfg_path = pipeline_dir / "unet" / "config.json"
+        with open(unet_cfg_path) as f:
+            unet_cfg = json.load(f)
+        # SD2 uses 1024-dim cross attention; SD1 uses 768
+        if unet_cfg.get("cross_attention_dim") == 1024:
+            return "sd-2"
+    except Exception:
+        pass
+
+    return "sd-1"
+
+
+def _guess_base_from_name(name: str) -> str:
+    """Fallback heuristic: guess the model base from the name/repo-id."""
     name_lower = name.lower()
     if "sana" in name_lower:
         return "sana"

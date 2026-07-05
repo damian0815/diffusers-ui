@@ -607,7 +607,8 @@ class PipelineWorker:
             async with self._session_factory() as session:
                 service = GalleryService(session)
                 record = await service.record_image(
-                    item, image_name, board_id, model_name
+                    item, image_name, board_id, model_name,
+                    gen_seq=item.item_id,
                 )
                 await session.commit()
                 # Build event payload (same shape as _image_record_to_dict / _image_record_to_dict)

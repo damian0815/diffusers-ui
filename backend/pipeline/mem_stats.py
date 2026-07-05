@@ -56,6 +56,19 @@ SAFETY_MARGIN: float = 0.80   # fraction of total VRAM considered safe to target
 
 # ── device helpers ────────────────────────────────────────────────────────────
 
+def _current_bytes(device: str) -> int:
+    """Return currently-allocated device memory in bytes (best-effort)."""
+    try:
+        import torch
+        if device.startswith("cuda"):
+            return int(torch.cuda.memory_allocated())
+        if device == "mps":
+            return int(torch.mps.current_allocated_memory())
+    except Exception:
+        pass
+    return 0
+
+
 def _peak_bytes(device: str) -> int:
     """Return peak-allocated bytes since the last reset (best-effort)."""
     try:

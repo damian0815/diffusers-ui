@@ -29,6 +29,8 @@ function app() {
     isGenerating: false,       // true while at least one job is in-flight
     isPaused: false,           // true when worker is paused (won't start new batches)
     maxBatchSize: 0,           // user-set cap on batch size (0 = auto)
+    vramUsed: 0,               // current device memory allocated (bytes)
+    vramTotal: 0,              // total device memory (bytes)
     isEnqueuing: false,        // true during the enqueue network request
     _previewDataUrl: null,     // latest live-preview data URL (null = no current frame)
     _currentDisplayName: null, // image_name currently shown (null when showing preview/nothing)
@@ -888,6 +890,8 @@ function app() {
         const data = await resp.json();
         this.isPaused = data.paused;
         this.maxBatchSize = data.max_batch_size;
+        this.vramUsed = data.vram_used ?? 0;
+        this.vramTotal = data.vram_total ?? 0;
       } catch (e) {}
     },
 
@@ -910,8 +914,9 @@ function app() {
         const data = await resp.json();
         this.queueDetails = data.items || [];
       } catch (e) {}
-      // Keep loaded-model indicator in sync while on the queue tab.
+      // Keep loaded-model indicator and VRAM in sync while on the queue tab.
       await this.checkLoadedModel();
+      await this.loadWorkerStatus();
     },
 
     async cancelQueueItem(itemId) {

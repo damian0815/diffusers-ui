@@ -11,14 +11,6 @@ from diffusers.utils.torch_utils import randn_tensor
 from backend.config import settings
 from backend.domain import ModelEntry
 
-# Sub-module names that hold the bulk of VRAM across all pipeline types.
-_HEAVY_SUBMODULES = (
-    "transformer", "unet",
-    "text_encoder", "text_encoder_2", "text_encoder_3",
-    "vae", "image_encoder",
-)
-
-
 class PipelineLoadError(Exception):
     """Raised when a pipeline fails to load."""
 
@@ -77,35 +69,37 @@ class PipelineLoader:
             # them lets the GC collect the modules once we del the pipeline.
             try:
                 from accelerate.hooks import remove_hook_from_module
-                for name in _HEAVY_SUBMODULES:
-                    mod = getattr(pipeline, name, None)
-                    if mod is not None:
-                        remove_hook_from_module(mod, recurse=True)
+                for _name, mod in pipeline.components.items():
+                    remove_hook_from_module(mod, recurse=True)
             except Exception:
                 pass  # accelerate not installed, or no hooks — fine either way
 
-            # ── Step 2: move sub-modules to CPU ─────────────────────────
+            # ── Step 2: move every sub-module to CPU ────────────────────
             # Calling .to("cpu") replaces each CUDA tensor with a CPU copy
             # and releases the CUDA allocation *immediately*, before GC runs.
-            # This is the most reliable way to free VRAM on model switch.
+            # We iterate over ALL named children (not just a known subset)
+            # so that components like the scheduler, safety_checker,
+            # controlnet, etc. are covered.  Each child is wrapped in
+            # try/except so quantised modules (e.g. bitsandbytes 4-bit)
+            # that cannot be moved to CPU fail gracefully without aborting.
             if is_cuda:
-                for name in _HEAVY_SUBMODULES:
-                    mod = getattr(pipeline, name, None)
-                    if mod is None:
-                        continue
+                for _name, mod in pipeline.components.items():
                     try:
                         mod.to("cpu")
                     except Exception:
-                        pass  # quantised modules may not support .to()
+                        pass
 
             # ── Step 3: release Python object and run GC ─────────────────
             del pipeline
             gc.collect()
 
-            # ── Step 4: return freed blocks to the CUDA allocator ────────
+            # ── Step 4: synchronise then return freed blocks ────────────
+            # synchronize() must come BEFORE empty_cache() so any pending
+            # CUDA operations complete first, otherwise the allocator may
+            # keep blocks alive that reference in-flight work.
             if is_cuda and torch.cuda.is_available():
-                torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+                torch.cuda.empty_cache()
 
         except Exception:
             logging.exception("Error during pipeline unload — VRAM may not be fully freed")

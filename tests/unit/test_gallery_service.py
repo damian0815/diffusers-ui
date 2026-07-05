@@ -109,6 +109,53 @@ async def test_list_images_basic(service):
     assert len(images) == 3
 
 
+async def test_list_images_ordered_by_gen_seq(service):
+    """
+    Images recorded with explicit gen_seq values must be returned in
+    gen_seq descending order regardless of the order they were recorded in.
+    This mirrors the real scenario where batch processing reorders items:
+    items enqueued as A(1), B(2), C(3), D(4), E(5) may be recorded in
+    batch order [A, C, D] then [B, E], but the gallery query must sort
+    by gen_seq DESC so that the full set reads as E, D, C, B, A (i.e.
+    reverse-enqueue, which the frontend flips back to enqueue order).
+    """
+    g = await service.create_gallery("Board")
+
+    # Simulate batch 1: process A(gen_seq=1), C(3), D(4) first
+    a = await service.record_image(make_item(seed=1), "A.png", g.board_id, "model", gen_seq=1)
+    c = await service.record_image(make_item(seed=3), "C.png", g.board_id, "model", gen_seq=3)
+    d = await service.record_image(make_item(seed=4), "D.png", g.board_id, "model", gen_seq=4)
+
+    # Simulate batch 2: process B(gen_seq=2), E(5) later
+    b = await service.record_image(make_item(seed=2), "B.png", g.board_id, "model", gen_seq=2)
+    e = await service.record_image(make_item(seed=5), "E.png", g.board_id, "model", gen_seq=5)
+
+    images = await service.list_images(g.board_id)
+    names = [img.image_name for img in images]
+    # Expected: gen_seq DESC → 5(E), 4(D), 3(C), 2(B), 1(A)
+    assert names == ["E.png", "D.png", "C.png", "B.png", "A.png"], f"got {names}"
+
+
+async def test_list_images_none_gen_seq_last(service):
+    """
+    Images whose gen_seq is NULL must appear after any image with a
+    non-NULL gen_seq, sorted by created_at DESC among themselves.
+    """
+    g = await service.create_gallery("Board")
+
+    # Record two images with explicit gen_seq
+    a = await service.record_image(make_item(seed=1), "A.png", g.board_id, "model", gen_seq=10)
+    b = await service.record_image(make_item(seed=2), "B.png", g.board_id, "model", gen_seq=20)
+
+    # Record one image WITHOUT gen_seq (NULL)
+    c = await service.record_image(make_item(seed=3), "C.png", g.board_id, "model")
+
+    images = await service.list_images(g.board_id)
+    names = [img.image_name for img in images]
+    # gen_seq DESC: B(20), A(10), then C(NULL) last
+    assert names == ["B.png", "A.png", "C.png"], f"got {names}"
+
+
 async def test_search_by_prompt(service):
     g = await service.create_gallery("Board")
     await service.record_image(make_item(prompt="ocean sunset"), "img1.png", g.board_id, "model")

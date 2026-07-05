@@ -80,12 +80,7 @@
                   @click="cancelGeneration()"
                   x-show="isGenerating"
                   title="Cancel current generation">✕</button>
-          <button class="icon-btn sm"
-                  @click="togglePause()"
-                  x-show="!isGenerating"
-                  title="Pause / resume batch processing">
-            <span x-text="isPaused ? '▶' : '⏸'"></span>
-          </button>
+          <!-- pause/resume button is in the Queue view header -->
           <button class="icon-btn generate-priority" @click="generate(true)"
                   :disabled="isEnqueuing"
                   title="Front of queue  ·  ⌘⇧↩">⏫</button>
@@ -662,6 +657,10 @@
               x-show="loadedModelKey"
               x-text="`Loaded: ${models.find(m => m.key === loadedModelKey)?.name || loadedModelKey}`"
               title="Model currently in memory"></span>
+        <span class="stat-pill vram"
+              x-show="vramTotal > 0"
+              x-text="`VRAM: ${(vramUsed / 1e9).toFixed(1)} / ${(vramTotal / 1e9).toFixed(1)} GB`"
+              title="Device memory usage"></span>
       </div>
       <div class="fs-header-actions">
         <label class="field max-batch-field" title="Max items per batch (0 = auto)">
@@ -676,11 +675,16 @@
         <button class="btn-secondary danger" @click="clearQueue()" title="Cancel all pending">Clear pending</button>
         <button class="btn-secondary"
                 @click="clearModelCache()"
-                :disabled="clearingCache || isGenerating"
+                :disabled="clearingCache || isGenerating || !loadedModelKey"
                 :class="{'is-loading': clearingCache}"
                 x-show="loadedModelKey"
                 title="Unload the currently loaded model from memory / VRAM">
           <span x-text="clearingCache ? '· · ·' : '🗑 Unload model'"></span>
+        </button>
+        <button class="btn-secondary"
+                @click="togglePause()"
+                title="Pause / resume batch processing (takes effect after current batch)">
+          <span x-text="isPaused ? '▶ Resume' : '⏸ Pause'"></span>
         </button>
       </div>
     </div>
