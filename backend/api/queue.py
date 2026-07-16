@@ -358,8 +358,10 @@ async def worker_status(queue_id: str, request: Request):
         "queue_id": queue_id,
         "paused": worker.is_paused,
         "max_batch_size": worker.max_batch_size,
+        "probe_batch_size": worker._mem_advisor._probe_batch_size,
         "vram_used": _current_bytes(settings.device),
         "vram_total": _total_bytes(settings.device),
+        "images_per_sec": worker.images_per_sec,
     }
 
 

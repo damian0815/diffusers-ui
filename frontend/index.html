@@ -475,7 +475,7 @@
 
     <!-- ── RIGHT: Gallery ── -->
     <aside id="gallery-panel"
-           x-data="gallery"
+           x-data="gallery()"
            x-on:select-image.window="handleExternalSelect($event)">
 
       <div class="collapsed-strip">
@@ -492,23 +492,39 @@
               </template>
             </select>
             <button class="icon-btn" title="New gallery" @click="createGallery()">+</button>
+            <button class="icon-btn" title="Gallery options"
+                    @click="showOptions = !showOptions">⚙</button>
             <button class="icon-btn" onclick="Layout.toggleRight()" title="Collapse gallery  ·  G">◀</button>
           </div>
 
           <div class="row" style="margin-top:6px">
             <input type="text" x-model="search" placeholder="Search prompts…"
                    @input.debounce.400ms="resetAndLoad()">
-            <label class="checkbox-label" title="Starred only">
-              <input type="checkbox" x-model="starredOnly" @change="resetAndLoad()"> ⭐
-            </label>
+            <span class="gallery-total" x-show="total > 0" x-text="`${total} images`"></span>
           </div>
 
-          <div class="gallery-options-row">
-            <span class="field-label" style="margin:0">Cols</span>
-            <button class="icon-btn sm" @click="thumbsPerRow = Math.max(1, thumbsPerRow - 1)">−</button>
-            <span class="cols-value" x-text="thumbsPerRow"></span>
-            <button class="icon-btn sm" @click="thumbsPerRow = Math.min(8, thumbsPerRow + 1)">+</button>
-            <span class="gallery-total" x-show="total > 0" x-text="`${total} images`"></span>
+          <!-- Gallery options popup -->
+          <div class="gallery-options-popup" x-show="showOptions"
+               @click.outside="showOptions = false" x-transition>
+            <div class="option-row">
+              <span class="option-label">Sort</span>
+              <button :class="{active: sortBy === 'gen_seq'}"
+                      @click="sortBy='gen_seq'; resetAndLoad(); showOptions=false">Submission</button>
+              <button :class="{active: sortBy === 'created_at'}"
+                      @click="sortBy='created_at'; resetAndLoad(); showOptions=false">Gen</button>
+            </div>
+            <div class="option-row">
+              <label class="checkbox-label" style="margin:0">
+                <input type="checkbox" x-model="starredFirst"
+                       @change="resetAndLoad()"> Starred first
+              </label>
+            </div>
+            <div class="option-row">
+              <span class="option-label">Cols</span>
+              <button class="icon-btn sm" @click="thumbsPerRow = Math.max(1, thumbsPerRow - 1)">−</button>
+              <span class="cols-value" x-text="thumbsPerRow"></span>
+              <button class="icon-btn sm" @click="thumbsPerRow = Math.min(8, thumbsPerRow + 1)">+</button>
+            </div>
           </div>
 
           <div class="gallery-nav-row" x-show="total > 0">
@@ -661,21 +677,44 @@
               x-show="vramTotal > 0"
               x-text="`VRAM: ${(vramUsed / 1e9).toFixed(1)} / ${(vramTotal / 1e9).toFixed(1)} GB`"
               title="Device memory usage"></span>
+        <span class="stat-pill eta"
+              x-show="imagesPerSec > 0 && queueDetails.filter(i=>i.status==='pending').length > 0"
+              x-text="`ETA: ${(() => {
+                const pending = queueDetails.filter(i=>i.status==='pending').length;
+                const secs = Math.round(pending / imagesPerSec);
+                if (secs < 60) return `${secs}s`;
+                if (secs < 3600) return `${Math.floor(secs/60)}m ${secs%60}s`;
+                return `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m`;
+              })()}`"></span>
       </div>
       <div class="fs-header-actions">
         <label class="field max-batch-field" title="Max items per batch (0 = auto)">
           <span style="font-size:12px;color:var(--text-dim);margin-right:4px">Batch:</span>
+
+          <!-- Read-only display -->
+          <span class="batch-size-display"
+                x-show="!editingBatchSize"
+                @click="editBatchVal = maxBatchSize; editingBatchSize = true; $nextTick(() => $refs.batchInput.focus())">
+            <span x-text="maxBatchSize || 'auto'"></span>
+            <button class="icon-btn sm" style="font-size:11px;padding:0 2px">✎</button>
+          </span>
+
+          <!-- Editable input -->
           <input type="number" min="0" max="64" step="1"
-                 style="width:44px;text-align:center"
-                 x-model.number="maxBatchSize"
-                 @change="setMaxBatchSize(maxBatchSize)">
+                 x-ref="batchInput"
+                 x-show="editingBatchSize"
+                 x-model.number="editBatchVal"
+                 @keydown.enter="submitBatchSize()"
+                 @keydown.escape="editingBatchSize = false; editBatchVal = maxBatchSize"
+                 @blur="submitBatchSize()"
+                 style="width:44px;text-align:center">
         </label>
         <button class="btn-secondary" @click="loadQueueDetails()" title="Refresh">↻ Refresh</button>
         <button class="btn-secondary" @click="pruneQueue()" title="Remove completed/failed rows">Prune done</button>
         <button class="btn-secondary danger" @click="clearQueue()" title="Cancel all pending">Clear pending</button>
         <button class="btn-secondary"
                 @click="clearModelCache()"
-                :disabled="clearingCache || isGenerating || !loadedModelKey"
+                :disabled="clearingCache || (isGenerating && !isPaused) || !loadedModelKey"
                 :class="{'is-loading': clearingCache}"
                 x-show="loadedModelKey"
                 title="Unload the currently loaded model from memory / VRAM">

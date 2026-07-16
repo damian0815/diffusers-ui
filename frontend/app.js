@@ -29,8 +29,12 @@ function app() {
     isGenerating: false,       // true while at least one job is in-flight
     isPaused: false,           // true when worker is paused (won't start new batches)
     maxBatchSize: 0,           // user-set cap on batch size (0 = auto)
+    probeBatchSize: 0,         // current probe value from the memory advisor
+    editingBatchSize: false,   // true while the inline batch-size input is shown
+    editBatchVal: 0,           // working value during editing
     vramUsed: 0,               // current device memory allocated (bytes)
     vramTotal: 0,              // total device memory (bytes)
+    imagesPerSec: 0,           // rolling-window avg images/sec over last 20 gens
     isEnqueuing: false,        // true during the enqueue network request
     _previewDataUrl: null,     // latest live-preview data URL (null = no current frame)
     _currentDisplayName: null, // image_name currently shown (null when showing preview/nothing)
@@ -254,6 +258,17 @@ function app() {
             this.isGenerating = true;
             // Safety-net timeout for each — completion is normally driven by WS events.
             for (const id of newIds) this._pollItem(id);
+          }
+        } else {
+          // Server has no active items — clear stale frontend tracking state.
+          // This handles the case where WS events were missed (reconnect, tab
+          // switch) and isGenerating/queueItems got stuck from a prior session.
+          if (this.queueItems.length > 0 || this.isGenerating) {
+            this.queueItems = [];
+            this.isGenerating = false;
+            this.previewProgress = 0;
+            this._previewDataUrl = null;
+            this._currentDisplayName = null;
           }
         }
       } catch (e) {}
@@ -890,9 +905,34 @@ function app() {
         const data = await resp.json();
         this.isPaused = data.paused;
         this.maxBatchSize = data.max_batch_size;
+        this.editBatchVal = this.maxBatchSize;
+        this.probeBatchSize = data.probe_batch_size ?? 0;
         this.vramUsed = data.vram_used ?? 0;
         this.vramTotal = data.vram_total ?? 0;
+        this.imagesPerSec = data.images_per_sec ?? 0;
       } catch (e) {}
+    },
+
+    async submitBatchSize() {
+      this.editingBatchSize = false;
+      const val = Math.max(0, parseInt(this.editBatchVal) || 0);
+      if (val === this.maxBatchSize) return;
+      this.maxBatchSize = val;  // optimistic update
+      try {
+        const resp = await fetch('/api/v1/queue/default/max_batch_size', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ max_batch_size: val }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          this.maxBatchSize = data.max_batch_size;
+          this.editBatchVal = this.maxBatchSize;
+        }
+      } catch (e) {
+        this._setError('Could not set max batch size.');
+        this.loadWorkerStatus();  // revert to server truth
+      }
     },
 
     async setMaxBatchSize(n) {
@@ -979,7 +1019,7 @@ function app() {
     },
 
     async clearModelCache() {
-      if (this.clearingCache || this.isGenerating) return;
+      if (this.clearingCache || (this.isGenerating && !this.isPaused)) return;
       this.clearingCache = true;
       try {
         const resp = await fetch('/api/v2/models/unload_cache', { method: 'POST' });

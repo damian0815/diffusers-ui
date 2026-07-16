@@ -3,7 +3,8 @@ mem_stats.py — Adaptive batch-size advisor for the pipeline worker.
 
 Strategy
 --------
-* Start every session with ``probe_batch_size = 1``.
+* Persist the current ``probe_batch_size`` and ``max_batch_size_override`` so
+  the user's batch-size setting survives server restarts.
 * After each *successful* generation record::
 
       (pixel_area, batch_size, peak_bytes_used)
@@ -42,9 +43,11 @@ line with:
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -175,10 +178,41 @@ class MemoryAdvisor:
         self._records: list[MemRecord] = []
         self._probe_batch_size: int = 1   # ramp up 1 → 2 → 3 … on success
         self._gen_count_at_current_batch_size: int = 0  # consecutive successes at this probe
-        self._has_oomed: bool = False     # True after first OOM; switches to slow ramp-up
+        self._max_batch_size_is_known: bool = False  # True after first OOM; switches to slow ramp-up
         self._max_batch_size_override: int = 0  # 0 = no override; >0 caps probe
         self._best_k: int = 1             # current best scaling exponent
         self._best_a: float = 0.0         # coefficient for best model
+
+    # ── persistence ─────────────────────────────────────────────────────────
+
+    def save_state(self, path: Path) -> None:
+        """Persist user-facing batch-size settings to *path*."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "max_batch_size_override": self._max_batch_size_override,
+                    "probe_batch_size": self._probe_batch_size,
+                }
+            )
+        )
+        logger.info("Saved batch-size state to %s", path)
+
+    def load_state(self, path: Path) -> None:
+        """Load previously persisted batch-size settings (if available)."""
+        try:
+            data = json.loads(path.read_text())
+            self._max_batch_size_override = max(0, int(data["max_batch_size_override"]))
+            self._probe_batch_size = max(1, int(data["probe_batch_size"]))
+            logger.info(
+                "Loaded batch-size state: override=%d probe=%d",
+                self._max_batch_size_override,
+                self._probe_batch_size,
+            )
+        except FileNotFoundError:
+            pass
+        except Exception:
+            logger.warning("Failed to load batch-size state from %s", path, exc_info=True)
 
     # ── worker-facing API ─────────────────────────────────────────────────────
 
@@ -242,7 +276,7 @@ class MemoryAdvisor:
 
         if batch_size >= self._probe_batch_size:
             old = self._probe_batch_size
-            if not self._has_oomed:
+            if not self._max_batch_size_is_known:
                 self._probe_batch_size = batch_size + 1
                 logger.info(
                     "MemoryAdvisor: batch_size probe %d → %d  (rapid ramp-up, pre-OOM)",
@@ -264,11 +298,11 @@ class MemoryAdvisor:
     def record_oom(self, failed_batch_size: int) -> None:
         """Record an OOM failure; regresses the probe batch size.
 
-        Also useful to call from the OOM handler before requeueing so that
-        the next attempt will use a smaller batch.
+        Regresses to max(1, failed_batch_size // 2) so that the next attempt
+        uses a substantially smaller batch, reducing repeated OOMs.
         """
-        self._has_oomed = True
-        new_probe = max(1, failed_batch_size - 1)
+        self._max_batch_size_is_known = True
+        new_probe = max(1, failed_batch_size // 2)
         if new_probe < self._probe_batch_size:
             logger.warning(
                 "MemoryAdvisor: OOM at batch_size=%d — lowering probe to %d",

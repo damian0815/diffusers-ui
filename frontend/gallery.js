@@ -6,7 +6,10 @@ function gallery() {
     selectedBoardId: null,
     images: [],
     search: '',
-    starredOnly: false,
+    sortBy: 'gen_seq',
+    sortDir: 'desc',
+    starredFirst: false,
+    showOptions: false,
     offset: 0,
     limit: 50,
     total: 0,
@@ -95,7 +98,9 @@ function gallery() {
               board_id: boardId, offset: loadOff, limit: this.limit,
             });
             if (this.search) params.set('search', this.search);
-            if (this.starredOnly) params.set('starred_only', 'true');
+            params.set('sort_by', this.sortBy);
+            params.set('sort_dir', this.sortDir);
+            if (this.starredFirst) params.set('starred_first', 'true');
             const resp = await fetch(`/api/v1/images/?${params}`);
             if (!resp.ok) break;
             const data = await resp.json();
@@ -260,7 +265,9 @@ function gallery() {
           board_id: this.selectedBoardId, offset: this.offset, limit: this.limit,
         });
         if (this.search) params.set('search', this.search);
-        if (this.starredOnly) params.set('starred_only', 'true');
+        params.set('sort_by', this.sortBy);
+        params.set('sort_dir', this.sortDir);
+        if (this.starredFirst) params.set('starred_first', 'true');
         const resp = await fetch(`/api/v1/images/?${params}`);
         if (!resp.ok) throw new Error(resp.statusText);
         const data = await resp.json();
@@ -279,6 +286,39 @@ function gallery() {
       }
     },
 
+    _insertImageInOrder(img) {
+      const dir = this.sortDir === 'asc' ? 1 : -1;
+      const key = this.sortBy === 'created_at' ? 'created_at' : 'gen_seq';
+      const getVal = (item) => {
+        const v = item[key];
+        if (v === null || v === undefined) return dir === 1 ? Infinity : -Infinity;
+        return v;
+      };
+
+      const isStarredFirst = this.starredFirst;
+      const compare = (a, b) => {
+        if (isStarredFirst && a.starred !== b.starred) {
+          return a.starred ? -1 : 1;
+        }
+        const va = getVal(a);
+        const vb = getVal(b);
+        return va < vb ? -dir : va > vb ? dir : 0;
+      };
+
+      const imgs = [...this.images];
+      let lo = 0, hi = imgs.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (compare(imgs[mid], img) <= 0) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      imgs.splice(lo, 0, img);
+      this.images = imgs;
+    },
+
     async prependImage(imageName) {
       if (this.images.some(i => i.image_name === imageName)) return;
       try {
@@ -286,7 +326,7 @@ function gallery() {
         if (resp.ok) {
           const meta = await resp.json();
           if (!this.images.some(i => i.image_name === meta.image_name)) {
-            this.images.unshift(meta);
+            this._insertImageInOrder(meta);
             this.offset += 1;
             this.total += 1;
           }
@@ -554,7 +594,7 @@ function gallery() {
       } else if (event === 'image_created') {
         if (data.board_id === this.selectedBoardId &&
             !this.images.some(i => i.image_name === data.image_name)) {
-          this.images.unshift(data);
+          this._insertImageInOrder(data);
           this.offset += 1;
           this.total += 1;
         }

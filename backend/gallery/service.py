@@ -246,6 +246,9 @@ class GalleryService:
         starred_only: bool = False,
         offset: int = 0,
         limit: int = 50,
+        sort_by: str = "gen_seq",
+        sort_dir: str = "desc",
+        starred_first: bool = False,
     ) -> list[ImageRecord]:
         """
         Paginated image list with optional full-text search across
@@ -254,11 +257,18 @@ class GalleryService:
         gallery = await self.get_gallery(board_id)
         gallery_id = gallery.id if gallery else None
 
-        query = (
-            select(ImageRecord)
-            .options(selectinload(ImageRecord.tags))
-            .order_by(ImageRecord.gen_seq.desc().nullslast(), ImageRecord.created_at.desc())
-        )
+        sort_column = {
+            "gen_seq": ImageRecord.gen_seq,
+            "created_at": ImageRecord.created_at,
+        }.get(sort_by, ImageRecord.gen_seq)
+
+        order_col = sort_column.desc().nullslast() if sort_dir == "desc" else sort_column.asc().nullslast()
+
+        if starred_first:
+            query = select(ImageRecord).options(selectinload(ImageRecord.tags)).order_by(ImageRecord.starred.desc(), order_col)
+        else:
+            query = select(ImageRecord).options(selectinload(ImageRecord.tags)).order_by(order_col)
+
         if gallery_id is not None:
             query = query.where(ImageRecord.gallery_id == gallery_id)
         if search:
@@ -322,13 +332,17 @@ class GalleryService:
         await self._session.delete(record)
 
         for path in [
-            settings.images_dir / image_name,
-            settings.thumbnails_dir / image_name
+            (settings.images_dir / image_name).resolve(),
+            (settings.thumbnails_dir / image_name).resolve()
         ]:
+            if not path.exists():
+                logger.warning("File not found, skipping deletion: %s", path)
+                continue
             try:
-                path.unlink(missing_ok=True)
+                path.unlink()
+                logger.info("Deleted file: %s", path)
             except Exception:
-                pass
+                logger.exception("Failed to delete file: %s", path)
 
         await self._session.flush()
         return board_id

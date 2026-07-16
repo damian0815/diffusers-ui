@@ -141,6 +141,9 @@ async def list_images(
     starred_only: bool = False,
     offset: int = 0,
     limit: int = 50,
+    sort_by: str = "gen_seq",
+    sort_dir: str = "desc",
+    starred_first: bool = False,
     session=Depends(get_session),
 ):
     """Return a paginated list of image records plus the total matching count."""
@@ -152,6 +155,9 @@ async def list_images(
             starred_only=starred_only,
             offset=offset,
             limit=limit,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            starred_first=starred_first,
         ),
         service.count_images(
             board_id=board_id,

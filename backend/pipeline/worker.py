@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import threading
+import time
 import types
 import uuid
 from pathlib import Path
@@ -18,6 +20,29 @@ from backend.pipeline.batcher import get_critical_params
 from backend.pipeline.preview import latents_to_preview_image, PreviewBroadcaster
 from backend.pipeline.compel_encoder import build_prompt_embeds
 from backend.pipeline.mem_stats import MemoryAdvisor
+
+_BATCH_STATE_FILENAME = "batch_state.json"
+
+_WINDOW_SIZE = 20  # generations used for images/sec calculation
+
+
+class _GenerationTimingTracker:
+    """Rolling-window tracker for generation speed (images/sec)."""
+
+    def __init__(self) -> None:
+        self._samples: collections.deque[tuple[float, int]] = collections.deque(maxlen=_WINDOW_SIZE)
+
+    def record(self, elapsed_seconds: float, batch_size: int) -> None:
+        if elapsed_seconds > 0 and batch_size > 0:
+            self._samples.append((elapsed_seconds, batch_size))
+
+    @property
+    def images_per_sec(self) -> float:
+        if not self._samples:
+            return 0.0
+        total_images = sum(bs for _, bs in self._samples)
+        total_seconds = sum(t for t, _ in self._samples)
+        return total_images / total_seconds if total_seconds > 0 else 0.0
 
 if TYPE_CHECKING:
     from backend.queue.manager import QueueManager
@@ -122,6 +147,11 @@ class PipelineWorker:
         # Adaptive batch-size advisor: starts at probe=1, ramps up by +1 on each
         # successful run, regresses on OOM, and fits a power-law memory model.
         self._mem_advisor = MemoryAdvisor(device=settings.device)
+        # Rolling-window timing tracker for ETA calculation.
+        self._timing_tracker = _GenerationTimingTracker()
+        # Monotonically increasing gen_seq counter, assigned at processing time
+        # (not enqueue time) so gallery "Submission" sort reflects processing order.
+        self._gen_seq_counter: int = 0
 
     async def run(self) -> None:
         """
@@ -144,18 +174,21 @@ class PipelineWorker:
 
             pivot = items[0]
 
-            if pivot.priority:
-                batch = [pivot]
-            else:
-                crit = get_critical_params(pivot.params)
-                max_bs = self._mem_advisor.get_max_batch_size(crit.width * crit.height)
-                batch = [pivot]
-                if max_bs > 1:
+            crit = get_critical_params(pivot.params)
+            max_bs = self._mem_advisor.get_max_batch_size(crit.width * crit.height)
+            batch = [pivot]
+            if max_bs > 1:
+                if pivot.priority:
                     rest = await self._queue.dequeue_matching(
-                        lambda item, _crit=crit: get_critical_params(item.params) == _crit,
+                        lambda item, _crit=crit: item.priority and get_critical_params(item.params) == _crit,
                         max_bs - 1,
                     )
-                    batch.extend(rest)
+                else:
+                    rest = await self._queue.dequeue_matching(
+                        lambda item, _crit=crit: not item.priority and get_critical_params(item.params) == _crit,
+                        max_bs - 1,
+                    )
+                batch.extend(rest)
 
             if not self._running:
                 break
@@ -201,10 +234,72 @@ class PipelineWorker:
         """Current user-set cap on batch size (0 = auto)."""
         return self._mem_advisor.max_batch_size_override
 
+    @property
+    def images_per_sec(self) -> float:
+        """Rolling-window average images/sec over recent generations."""
+        return self._timing_tracker.images_per_sec
+
+    @property
+    def _batch_state_path(self) -> Path:
+        return settings.images_dir / _BATCH_STATE_FILENAME
+
+    def save_batch_state(self) -> None:
+        """Persist batch-size settings so they survive restarts."""
+        try:
+            self._mem_advisor.save_state(self._batch_state_path)
+        except Exception:
+            logger.warning("Failed to persist batch-size state", exc_info=True)
+
+    def load_batch_state(self) -> None:
+        """Load persisted batch-size settings (if available)."""
+        try:
+            self._mem_advisor.load_state(self._batch_state_path)
+        except Exception:
+            logger.warning("Failed to load batch-size state", exc_info=True)
+
+    async def init_gen_seq(self) -> None:
+        """Initialize the gen_seq counter from the highest existing value in the DB."""
+        if self._session_factory is None:
+            return
+        try:
+            from sqlalchemy import select, func
+            from backend.gallery.models import ImageRecord
+            async with self._session_factory() as session:
+                result = await session.execute(select(func.max(ImageRecord.gen_seq)))
+                max_seq = result.scalar()
+                if max_seq is not None:
+                    self._gen_seq_counter = int(max_seq)
+        except Exception:
+            logger.warning("Failed to load max gen_seq from DB", exc_info=True)
+
     def set_max_batch_size(self, n: int) -> None:
-        """Set a user cap on batch size (0 = auto, let the advisor decide)."""
-        self._mem_advisor.max_batch_size_override = n
-        logger.info("Max batch size set to %d%s", n, "" if n else " (auto)")
+        """Set a user cap on batch size (0 = auto, let the advisor decide).
+
+        If the requested value is larger than the current probe the probe is
+        bumped immediately so the new value takes effect on the next batch.
+        If the requested value is smaller than or equal to the probe, the
+        override is kept so the UI accurately reflects the chosen cap while
+        the adaptive probe restarts from that value.
+        """
+        n = max(0, n)
+        advisor = self._mem_advisor
+        if n == 0:
+            # Auto — clear any user cap, keep current probe.
+            advisor.max_batch_size_override = 0
+            logger.info("Max batch size set to 0 (auto, probe=%d)", advisor._probe_batch_size)
+        elif n > advisor._probe_batch_size:
+            # User wants larger batches than we've discovered.
+            advisor.max_batch_size_override = n
+            advisor._probe_batch_size = n
+            logger.info("Max batch size set to %d (larger than probe; probe bumped)", n)
+        else:
+            # User wants smaller batches — start discovery from this point.
+            advisor.max_batch_size_override = n
+            advisor._probe_batch_size = n
+            advisor._max_batch_size_is_known = False
+            advisor._gen_count_at_current_batch_size = 0
+            logger.info("Max batch size set to %d (reverting to discovery mode)", n)
+        self.save_batch_state()
 
     def cancel_generation(self) -> None:
         """Request that the current in-flight generation be aborted.
@@ -479,7 +574,9 @@ class PipelineWorker:
                         if _img2img_cleanup is not None:
                             _img2img_cleanup()
 
+            _t0 = time.perf_counter()
             result = await asyncio.to_thread(_run_pipeline)
+            self._timing_tracker.record(time.perf_counter() - _t0, len(batch))
 
             # Capture peak memory and record the run in the advisor.
             peak_bytes = self._mem_advisor.capture_peak()
@@ -528,12 +625,13 @@ class PipelineWorker:
 
         Strategy:
         - Free the VRAM cache immediately.
-        - Notify the MemoryAdvisor so it regresses the probe batch size.
-        - If the batch has more than one item, re-enqueue all items at the
-          front of the queue so they are retried with the reduced batch size.
+        - Notify the MemoryAdvisor so it regresses the probe batch size (halves it).
+        - If the batch has more than one item, split it in half: immediately retry
+          the first half and requeue the second half at the front of the queue.
         - If the batch is already a single item it cannot be split further;
           mark it as failed with a clear OOM message.
         """
+        logger.exception("OOM during inference")  # log the actual traceback
         import torch
         try:
             if torch.cuda.is_available():
@@ -541,16 +639,9 @@ class PipelineWorker:
         except Exception:
             pass
 
-        # Tell the advisor: probe should step back to failed_batch_size − 1.
-        self._mem_advisor.record_oom(len(batch))
-
-        if len(batch) > 1:
-            logger.warning(
-                "OOM with batch size %d — reducing probe to %d and requeuing.",
-                len(batch), self._mem_advisor._probe_batch_size,
-            )
-            await self._queue.requeue_items(batch, prepend=True)
-        else:
+        if len(batch) <= 1:
+            # Single item — cannot split further.
+            self._mem_advisor.record_oom(1)
             logger.error("OOM on single-item batch — failing item %s.", batch[0].item_id)
             await self._queue.mark_failed(
                 batch[0],
@@ -558,11 +649,29 @@ class PipelineWorker:
             )
             await self._broadcaster.broadcast_event(
                 "queue_item_failed",
-                {
-                    "item_id": batch[0].item_id,
-                    "error": "Out of memory — try reducing image size or number of steps.",
-                },
+                {"item_id": batch[0].item_id,
+                 "error": "Out of memory — try reducing image size or number of steps."},
             )
+            return
+
+        # Record OOM and regress the probe.
+        self._mem_advisor.record_oom(len(batch))
+
+        # Split the batch in half.
+        mid = max(1, len(batch) // 2)
+        first_half = batch[:mid]
+        second_half = batch[mid:]
+
+        logger.warning(
+            "OOM with batch size %d — halving: retrying %d now, requeueing %d.",
+            len(batch), len(first_half), len(second_half),
+        )
+
+        # Requeue second half at front.
+        await self._queue.requeue_items(second_half, prepend=True)
+
+        # Immediately retry first half.
+        _ = await self._run_batch(first_half)
 
     def _apply_scheduler(self, pipeline, sampler: str, prediction_type: str = 'default') -> None:
         """Swap the pipeline scheduler in-place based on the sampler name."""
@@ -608,8 +717,9 @@ class PipelineWorker:
                 service = GalleryService(session)
                 record = await service.record_image(
                     item, image_name, board_id, model_name,
-                    gen_seq=item.item_id,
+                    gen_seq=self._gen_seq_counter,
                 )
+                self._gen_seq_counter += 1
                 await session.commit()
                 # Build event payload (same shape as _image_record_to_dict / _image_record_to_dict)
                 created_at = record.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if record.created_at else None

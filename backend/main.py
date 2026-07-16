@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-logging.getLogger().setLevel(logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -70,8 +74,20 @@ async def lifespan(app: FastAPI):
     # Restore persisted queue state ------------------------------------------
     await _restore_queue()
 
+    # Restore batch-size settings so the UI doesn't reset to "auto".
+    worker.load_batch_state()
+
+    # Initialize gen_seq counter from DB so gallery submission order reflects
+    # processing order (not enqueue order).
+    await worker.init_gen_seq()
+
     # Start background worker
     task = asyncio.create_task(worker.run())
+
+    # Optionally start paused (set START_PAUSED=1)
+    if os.environ.get("START_PAUSED"):
+        worker.pause()
+        logger.info("Worker started in paused state (START_PAUSED is set).")
 
     yield
 
