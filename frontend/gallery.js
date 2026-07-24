@@ -34,6 +34,16 @@ function gallery() {
     // ── Move modal ───────────────────────────────────────────────────────
     moveModal: { open: false, targetBoardId: null },
 
+    // ── Regenerate modal ────────────────────────────────────────────────
+    regenModal: {
+      open: false,
+      selectedModelKey: null,
+      prepend: false,
+      _enqueuing: false,
+      _progress: null,   // null | { done: 0, total: 0 }
+    },
+    availableModels: [],
+
     _notifyGalleriesUpdated() {
       window.dispatchEvent(new CustomEvent('galleries-updated', {
         detail: { galleries: this.galleries },
@@ -141,11 +151,17 @@ function gallery() {
         this._isNavigating = false;
       });
 
+      // Receive models list from app component
+      window.addEventListener('receive-models-list', (e) => {
+        this.availableModels = e.detail.models;
+      });
+
       // Close context menu on any outside click; Escape closes both menu + modal
       window.addEventListener('click', () => { this.ctxMenu.open = false; });
       window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           this.ctxMenu.open = false;
+          if (this.regenModal.open) { this.closeRegenerateModal(); return; }
           this.moveModal.open = false;
         }
       });
@@ -522,6 +538,78 @@ function gallery() {
         alert(`Move failed: ${err.message}`);
       } finally {
         this._moving = false;
+      }
+    },
+
+    // ── Regenerate modal ──────────────────────────────────────────────
+
+    openRegenerateModal() {
+      this.ctxMenu.open = false;
+      this.regenModal = { open: true, selectedModelKey: null, prepend: false, _enqueuing: false, _progress: null };
+      window.dispatchEvent(new CustomEvent('request-models-list'));
+    },
+
+    closeRegenerateModal() {
+      if (this.regenModal._enqueuing) return;
+      this.regenModal.open = false;
+    },
+
+    async confirmRegenerate() {
+      const names = [...this.selectedImageNames];
+      const modelKey = this.regenModal.selectedModelKey;
+      const prepend = this.regenModal.prepend;
+      if (!names.length || !modelKey) return;
+
+      this.regenModal._enqueuing = true;
+      this.regenModal._progress = { done: 0, total: names.length };
+
+      try {
+        for (const name of names.toReversed()) {
+          const metaResp = await fetch(`/api/v1/images/i/${name}/metadata`);
+          if (!metaResp.ok) continue;
+          const meta = await metaResp.json();
+
+          const batch = {
+            prompt: meta.prompt,
+            negative_prompt: meta.negative_prompt || "",
+            seed: meta.seed,
+            width: meta.width,
+            height: meta.height,
+            steps: meta.steps,
+            cfg: meta.cfg,
+            cfg_rescale_multiplier: meta.cfg_rescale_multiplier || 0.0,
+            sampler: meta.sampler,
+            prediction_type: meta.prediction_type || "default",
+            model_key: modelKey,
+            board_id: this.selectedBoardId,
+            count: 1,
+          };
+          if (meta.source_image) {
+            batch.init_image = meta.source_image;
+            batch.strength = meta.strength;
+            batch.source_width = meta.source_width;
+            batch.source_height = meta.source_height;
+            batch.crop_left = meta.crop_left || 0.0;
+            batch.crop_top = meta.crop_top || 0.0;
+            batch.crop_width = meta.crop_width || 0.0;
+            batch.crop_height = meta.crop_height || 0.0;
+          }
+
+          await fetch('/api/v1/queue/default/enqueue_batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prepend, batch }),
+          });
+
+          this.regenModal._progress.done++;
+        }
+        this.selectedImageNames = [];
+        this.regenModal.open = false;
+      } catch (e) {
+        alert(`Regenerate failed: ${e.message}`);
+      } finally {
+        this.regenModal._enqueuing = false;
+        this.regenModal._progress = null;
       }
     },
 

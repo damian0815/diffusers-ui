@@ -545,6 +545,7 @@
           <span x-text="`${selectedImageNames.length} selected`"></span>
           <button class="btn-secondary sm" @click="openMoveModal()">Move to…</button>
           <button class="btn-secondary sm danger" @click="deleteSelected()">Delete</button>
+          <button class="btn-secondary sm" @click="openRegenerateModal()">Regenerate…</button>
           <button class="icon-btn sm" title="Clear selection"
                   @click="selectedImageNames = []; _lastClickIdx = null">✕</button>
         </div>
@@ -596,6 +597,7 @@
         <button class="ctx-item" @click="useAsImg2imgSource()">
           Use as img2img input
         </button>
+        <button class="ctx-item" @click="openRegenerateModal()">Regenerate with different model…</button>
         <div class="ctx-sep"></div>
         <button class="ctx-item danger" @click="deleteSelected()">
           Delete<template x-if="selectedImageNames.length > 1"><span x-text="` ${selectedImageNames.length} images`"></span></template>
@@ -642,6 +644,65 @@
                     :disabled="!moveModal.targetBoardId || _moving"
                     @click="confirmMove()">
               <span x-text="_moving ? 'Moving…' : 'Move'"></span>
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ── Regenerate modal ── -->
+      <div class="modal-backdrop"
+           style="display: none;"
+           x-show="regenModal.open"
+           x-transition.opacity
+           @click.self="closeRegenerateModal()">
+        <div class="modal-box"
+             x-show="regenModal.open"
+             x-transition>
+
+          <div class="modal-header">
+            <span class="modal-title"
+                  x-text="`Regenerate ${selectedImageNames.length} image${selectedImageNames.length !== 1 ? 's' : ''}`"></span>
+            <button class="info-close-btn" @click="closeRegenerateModal()">&times;</button>
+          </div>
+
+          <div class="modal-body" style="padding: 16px 20px;">
+            <!-- Progress bar (shown during enqueuing) -->
+            <div x-show="regenModal._progress" style="margin-bottom: 12px;">
+              <div style="background: var(--border); border-radius: 4px; height: 6px; overflow: hidden;">
+                <div style="background: var(--accent); height: 100%; transition: width 0.2s;"
+                     :style="`width: ${regenModal._progress ? (regenModal._progress.done / regenModal._progress.total * 100) : 0}%`"></div>
+              </div>
+              <p class="hint" style="margin-top: 4px;"
+                 x-text="regenModal._progress ? `Enqueuing ${regenModal._progress.done} of ${regenModal._progress.total}…` : ''"></p>
+            </div>
+
+            <!-- Form (hidden during enqueuing) -->
+            <div x-show="!regenModal._enqueuing" style="display: flex; flex-direction: column; gap: 12px;">
+              <div>
+                <label style="display: block; margin-bottom: 4px; font-weight: 500; color: var(--text); font-size: 13px;">Model</label>
+                <select x-model="regenModal.selectedModelKey"
+                        style="width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r); font-size: 13px;">
+                  <option value="" disabled selected>Select model…</option>
+                  <template x-for="m in availableModels" :key="m.key">
+                    <option :value="m.key" x-text="m.name"></option>
+                  </template>
+                </select>
+                <p x-show="availableModels.length === 0" class="hint" style="margin-top: 4px;">No models registered.</p>
+              </div>
+              <label class="checkbox-label">
+                <input type="checkbox" x-model="regenModal.prepend">
+                Prepend to queue (run first)
+              </label>
+            </div>
+          </div>
+
+          <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid #e5e7eb;">
+            <button class="btn-secondary" @click="closeRegenerateModal()">Cancel</button>
+            <button class="btn-primary"
+                    :disabled="!regenModal.selectedModelKey || regenModal._enqueuing"
+                    @click="confirmRegenerate()">
+              <span x-text="regenModal._enqueuing ? 'Enqueuing…' : 'Generate'"></span>
             </button>
           </div>
 

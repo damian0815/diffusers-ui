@@ -224,6 +224,17 @@ function app() {
       // page session started (e.g. server restarted, client reconnected).
       await this._reconcileQueue();
       await this.checkLoadedModel();
+
+      // Provide model list to gallery for regenerate-with-different-model feature
+      window.addEventListener('request-models-list', async () => {
+        try {
+          const resp = await fetch('/api/v2/models/');
+          const data = await resp.json();
+          window.dispatchEvent(new CustomEvent('receive-models-list', {
+            detail: { models: data.models },
+          }));
+        } catch (e) {}
+      });
     },
 
     // ----------------------------------------------------------------

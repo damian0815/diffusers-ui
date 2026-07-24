@@ -85,6 +85,7 @@ class GalleryService:
             )
             for img in result.scalars().all():
                 await self._session.delete(img)
+                self._delete_image_files(img.image_name)
                 deleted_images.append(img.image_name)
         await self._session.delete(gallery)
         await self._session.flush()
@@ -329,8 +330,13 @@ class GalleryService:
             g = result.scalar_one_or_none()
             board_id = g.board_id if g else None
 
+        self._delete_image_files(image_name)
         await self._session.delete(record)
 
+        await self._session.flush()
+        return board_id
+
+    def _delete_image_files(self, image_name: str) -> None:
         for path in [
             (settings.images_dir / image_name).resolve(),
             (settings.thumbnails_dir / image_name).resolve()
@@ -344,8 +350,6 @@ class GalleryService:
             except Exception:
                 logger.exception("Failed to delete file: %s", path)
 
-        await self._session.flush()
-        return board_id
 
     # ------------------------------------------------------------------
     # Stars & Tags
