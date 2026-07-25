@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import uuid
@@ -133,6 +134,8 @@ class GalleryService:
             crop_top=p.crop_top,
             crop_width=p.crop_width,
             crop_height=p.crop_height,
+            lora_keys=json.dumps(p.lora_keys) if p.lora_keys else None,
+            lora_strengths=json.dumps(p.lora_strengths) if p.lora_strengths else None,
         )
 
         # Copy source image into dedicated img2img board for survival

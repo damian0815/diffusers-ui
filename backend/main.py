@@ -24,7 +24,7 @@ from backend.model_registry.registry import ModelRegistry
 from backend.model_registry.loader import PipelineLoader
 from backend.pipeline.preview import PreviewBroadcaster
 from backend.pipeline.worker import PipelineWorker
-from backend.api import queue, images, boards, models, websocket
+from backend.api import queue, images, boards, models, websocket, loras
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +201,7 @@ app.include_router(images.router)
 app.include_router(boards.router)
 app.include_router(models.router)
 app.include_router(websocket.router)
+app.include_router(loras.router)
 
 # Serve the frontend as static files (must be last — catch-all)
 _frontend_dir = Path(__file__).parent.parent / "frontend"

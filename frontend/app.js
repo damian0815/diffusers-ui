@@ -67,6 +67,11 @@ function app() {
     sourceImage: null,          // null | {name, url, width, height}
     sourceStrength: 0.75,
 
+    // ---- LoRA state ----
+    loraEntries: [],            // all available LoRAs from GET /api/v1/loras/
+    activeLoras: [],            // [{filename: "x.safetensors", strength: 1.0}, ...]
+    _selectedLoraFile: '',      // dropdown binding for LoRA picker
+
     // ---- Preview & aspect-ratio state ----
     showPreview: true,
     showInfoOverlay: false,
@@ -100,6 +105,7 @@ function app() {
     async init() {
       Layout.init();
       await this.loadModels();
+      await this.fetchLoras();
       this._updateResolutionStep();
       this.setupKeyboardShortcuts();
       this.loadWorkerStatus();
@@ -383,6 +389,10 @@ function app() {
           batch.crop_height = q.height / this.sourceImage.height;
         }
       }
+      if (this.activeLoras.length > 0) {
+        batch.lora_keys = this.activeLoras.map(l => l.filename);
+        batch.lora_strengths = this.activeLoras.map(l => l.strength);
+      }
       return { prepend, batch };
     },
 
@@ -477,6 +487,32 @@ function app() {
       this._aspectRatioValue = null;
       this.selectedAspectRatio = 'custom';
       this._setBothWidthAndHeight(512, 512);
+    },
+
+    // ----------------------------------------------------------------
+    // LoRA management
+    // ----------------------------------------------------------------
+
+    async fetchLoras() {
+      try {
+        const resp = await fetch('/api/v1/loras/');
+        if (!resp.ok) return;
+        this.loraEntries = await resp.json();
+      } catch (e) {}
+    },
+
+    addLora(filename) {
+      if (!filename || this.activeLoras.find(l => l.filename === filename)) return;
+      this.activeLoras.push({ filename, strength: 1.0 });
+      this._selectedLoraFile = '';
+    },
+
+    removeLora(index) {
+      this.activeLoras.splice(index, 1);
+    },
+
+    updateLoraStrength(index, value) {
+      this.activeLoras[index].strength = parseFloat(value);
     },
 
     // ----------------------------------------------------------------
@@ -760,7 +796,14 @@ function app() {
     adoptSettings(what) {
       const meta = this.selectedImageMeta;
       if (!meta) return;
-      if (what === 'all' || what === 'prompt')  { this.prompt = meta.prompt || ''; this.negativePrompt = meta.negative_prompt || ''; }
+      if (what === 'all' || what === 'positive')  { this.prompt = meta.prompt || ''; }
+      if (what === 'all' || what === 'negative')  { this.negativePrompt = meta.negative_prompt || ''; }
+      if (what === 'all' || what === 'prompt')    { this.prompt = meta.prompt || ''; this.negativePrompt = meta.negative_prompt || ''; }
+      if (what === 'all' || what === 'loras')     {
+        const keys = meta.lora_keys || [];
+        const strengths = meta.lora_strengths || [];
+        this.activeLoras = keys.map((k, i) => ({ filename: k, strength: strengths[i] ?? 1.0 }));
+      }
       if (what === 'all' || what === 'size')    { this._conformResolution('incoming', { width: meta.width, height: meta.height }); }
       if (what === 'all' || what === 'model')   { this.modelKey = meta.model_key || this.modelKey; }
       if (what === 'all' || what === 'seed')    { this.seed = meta.seed; }

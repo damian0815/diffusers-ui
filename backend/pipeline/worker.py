@@ -152,6 +152,8 @@ class PipelineWorker:
         # Monotonically increasing gen_seq counter, assigned at processing time
         # (not enqueue time) so gallery "Submission" sort reflects processing order.
         self._gen_seq_counter: int = 0
+        # Track currently loaded LoRAs to avoid redundant load/unload cycles.
+        self._loaded_loras: set[str] = set()
 
     async def run(self) -> None:
         """
@@ -310,6 +312,64 @@ class PipelineWorker:
         """
         self._cancel_event.set()
 
+    async def _load_loras(self, pipeline, batch: list[QueueItem]) -> None:
+        """Load and activate LoRAs for the current batch.
+
+        Compares the batch's LoRA set against the currently loaded set and
+        only loads/unloads when the set changes. After loading, calls
+        set_adapters with per-item weights.
+        """
+        # Collect unique LoRA filenames from the batch
+        batch_loras: dict[str, float] = {}
+        for item in batch:
+            for key, strength in zip(item.params.lora_keys, item.params.lora_strengths):
+                if key not in batch_loras:
+                    batch_loras[key] = strength
+
+        batch_lora_set = set(batch_loras.keys())
+
+        # Skip if LoRAs haven't changed
+        if batch_lora_set == self._loaded_loras:
+            # Same set — just update weights (they may differ per batch)
+            if batch_lora_set:
+                adapter_names = list(batch_lora_set)
+                # Use the first item's weights as representative for the batch
+                weights = [batch_loras[k] for k in adapter_names]
+                await asyncio.to_thread(
+                    pipeline.set_adapters, adapter_names, adapter_weights=weights
+                )
+            return
+
+        # Unload previous LoRAs if any
+        if self._loaded_loras:
+            await asyncio.to_thread(pipeline.unload_lora)
+            self._loaded_loras.clear()
+
+        # Load new LoRAs
+        if batch_lora_set:
+            for filename in batch_lora_set:
+                try:
+                    await asyncio.to_thread(
+                        pipeline.load_lora_weights,
+                        settings.loras_dir,
+                        weight_name=filename,
+                        adapter_name=filename,
+                    )
+                except Exception as exc:
+                    logger.error("Failed to load LoRA %s: %s", filename, exc)
+                    # Skip this LoRA but continue with others
+                    continue
+
+            # Activate LoRAs with their weights
+            adapter_names = [k for k in batch_lora_set if k not in batch_loras or True]
+            # Filter to only successfully loaded adapters
+            adapter_names = list(batch_lora_set)
+            weights = [batch_loras[k] for k in adapter_names]
+            await asyncio.to_thread(
+                pipeline.set_adapters, adapter_names, adapter_weights=weights
+            )
+            self._loaded_loras = batch_lora_set.copy()
+
     async def _run_batch(self, batch: list[QueueItem]) -> bool:
         """Run a single batch: load model, generate, save, record.
 
@@ -357,6 +417,9 @@ class PipelineWorker:
             batch[0].params.sampler,
             batch[0].params.prediction_type,
         )
+
+        # Load and activate LoRAs for this batch
+        await self._load_loras(pipeline, batch)
 
         for item in batch:
             await self._queue.mark_processing(item)
@@ -592,6 +655,10 @@ class PipelineWorker:
                 )
                 await self._record_in_gallery(item, image_name, entry.name)
 
+            # Disable LoRAs to reset for next batch
+            if self._loaded_loras:
+                await asyncio.to_thread(pipeline.disable_lora)
+
             return False  # success — no OOM
 
         except GenerationCancelled:
@@ -738,6 +805,8 @@ class PipelineWorker:
                     "prediction_type": item.params.prediction_type,
                     "model_key": item.params.model_key,
                     "model_name": model_name,
+                    "lora_keys": item.params.lora_keys,
+                    "lora_strengths": item.params.lora_strengths,
                     "starred": False,
                     "gen_seq": record.gen_seq,
                     "created_at": created_at,

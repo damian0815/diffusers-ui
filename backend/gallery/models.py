@@ -69,6 +69,10 @@ class ImageRecord(Base):
     crop_width = Column(Float, default=0.0)
     crop_height = Column(Float, default=0.0)
 
+    # LoRA metadata (JSON-encoded lists for backward compat)
+    lora_keys = Column(String, nullable=True)       # JSON-encoded list of filenames
+    lora_strengths = Column(String, nullable=True)   # JSON-encoded list of strengths
+
     starred = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     tags = relationship("Tag", secondary=image_tags, back_populates="images")

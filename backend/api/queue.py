@@ -38,6 +38,8 @@ class BatchParams(BaseModel):
     crop_top: float = 0.0
     crop_width: float = 0.0
     crop_height: float = 0.0
+    lora_keys: list[str] = []
+    lora_strengths: list[float] = []
 
 
 class EnqueueRequest(BaseModel):
@@ -272,6 +274,8 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
             crop_top=batch.crop_top,
             crop_width=batch.crop_width,
             crop_height=batch.crop_height,
+            lora_keys=batch.lora_keys,
+            lora_strengths=batch.lora_strengths,
         )
         item = QueueItem(params=params, priority=prepend)
         await queue.enqueue(item, prepend=prepend)
@@ -494,6 +498,8 @@ def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
         "crop_top": p.crop_top,
         "crop_width": p.crop_width,
         "crop_height": p.crop_height,
+        "lora_keys": p.lora_keys,
+        "lora_strengths": p.lora_strengths,
         "starred": False,
         "gen_seq": None,
         "created_at": None,

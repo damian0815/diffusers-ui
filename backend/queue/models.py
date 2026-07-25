@@ -37,6 +37,10 @@ class PersistedQueueItem(Base):
     output_image_name = Column(String, nullable=True)
     error = Column(String, nullable=True)
 
+    # LoRA metadata (JSON-encoded lists for backward compat)
+    lora_keys = Column(String, nullable=True)       # JSON-encoded list of filenames
+    lora_strengths = Column(String, nullable=True)   # JSON-encoded list of strengths
+
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 

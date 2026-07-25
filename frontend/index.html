@@ -254,6 +254,35 @@
             </select>
           </div>
 
+          <div class="section-divider"></div>
+          <div class="section-heading">LoRA</div>
+
+          <div class="row" style="align-items:center;">
+            <div class="field" style="flex:1">
+              <select x-model="_selectedLoraFile">
+                <option value="">— Select LoRA —</option>
+                <template x-for="lora in loraEntries" :key="lora.filename">
+                  <option :value="lora.filename" x-text="lora.name"></option>
+                </template>
+              </select>
+            </div>
+            <button class="btn-secondary" @click="addLora(_selectedLoraFile)" :disabled="!_selectedLoraFile">Add</button>
+          </div>
+
+          <template x-for="(lora, idx) in activeLoras" :key="lora.filename">
+            <div class="row" style="align-items:center;">
+              <span style="flex:1; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                    x-text="lora.filename"></span>
+              <input type="range" min="-1" max="2" step="0.05"
+                     :value="lora.strength"
+                     @input="updateLoraStrength(idx, $event.target.value)"
+                     style="width:100px;">
+              <span style="width:40px; text-align:right; font-size:11px;"
+                    x-text="lora.strength.toFixed(2)"></span>
+              <button class="icon-btn sm" @click="removeLora(idx)" title="Remove">✕</button>
+            </div>
+          </template>
+
         </div><!-- /panel-scroll -->
       </div><!-- /panel-inner -->
 
@@ -322,11 +351,13 @@
 
       <div id="adopt-bar" x-show="selectedImageMeta">
         <span class="adopt-label">Adopt:</span>
-        <button class="adopt-btn" @click="adoptSettings('prompt')" title="P">Prompt</button>
+        <button class="adopt-btn" @click="adoptSettings('positive')" title="P">Positive</button>
+        <button class="adopt-btn" @click="adoptSettings('negative')" title="N">Negative</button>
         <button class="adopt-btn" @click="adoptSettings('size')"   title="D">Size</button>
         <button class="adopt-btn" @click="adoptSettings('model')"  title="">Model</button>
         <button class="adopt-btn" @click="adoptSettings('seed')"   title="S">Seed</button>
         <button class="adopt-btn" @click="adoptSettings('steps')"  title="">Steps</button>
+        <button class="adopt-btn" @click="adoptSettings('loras')"  title="">LoRAs</button>
         <button class="adopt-btn" @click="adoptSettings('all')"    title="A">All</button>
         <button class="icon-btn star-btn" @click="toggleStar()"
                 :title="selectedImageMeta?.starred ? 'Unstar' : 'Star'">
@@ -450,6 +481,18 @@
             <div class="info-field">
               <span class="info-label">Prediction Type</span>
               <span class="info-value" x-text="selectedImageMeta?.prediction_type || 'default'"></span>
+            </div>
+          </div>
+          <div class="info-row" x-show="selectedImageMeta?.lora_keys?.length">
+            <button class="info-adopt-btn" @click="adoptSettings('loras')" title="Use LoRAs">↩</button>
+            <div class="info-field">
+              <span class="info-label">LoRAs</span>
+              <span class="info-value"
+                    x-text="(selectedImageMeta?.lora_keys || []).map((k, i) => {
+                        const s = selectedImageMeta?.lora_strengths?.[i];
+                        return s !== undefined ? `${k} (${s.toFixed(2)})` : k;
+                    }).join(', ') || '—'">
+              </span>
             </div>
           </div>
 

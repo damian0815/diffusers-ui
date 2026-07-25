@@ -27,6 +27,7 @@ class Settings:
     db_url: str = "sqlite+aiosqlite:///gallery.db"
     thumbnail_size: tuple[int, int] = (256, 256)
     batch_window_s: float = 0.3   # how long to wait collecting items before batching
+    loras_dir: Path = field(default_factory=lambda: Path("loras"))
     preview_every_n_steps: int = 1
     # Preview method: "taesd" (higher quality, uses tiny neural decoder) or
     # "approx" (linear RGB projection — fast, no extra weights required).

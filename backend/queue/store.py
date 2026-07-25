@@ -1,6 +1,7 @@
 """Async persistence store for queue items."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Callable
@@ -48,6 +49,8 @@ class QueueStore:
                     prediction_type=item.params.prediction_type,
                     output_image_name=item.output_image_name,
                     error=item.error,
+                    lora_keys=json.dumps(item.params.lora_keys) if item.params.lora_keys else None,
+                    lora_strengths=json.dumps(item.params.lora_strengths) if item.params.lora_strengths else None,
                     created_at=now,
                     updated_at=now,
                 )
@@ -107,6 +110,8 @@ def _row_to_domain(row: PersistedQueueItem) -> QueueItem:
         model_key=row.model_key,
         board_id=row.board_id,
         prediction_type=row.prediction_type if row.prediction_type else "default",
+        lora_keys=json.loads(row.lora_keys) if row.lora_keys else [],
+        lora_strengths=json.loads(row.lora_strengths) if row.lora_strengths else [],
     )
     # Pass item_id explicitly so default_factory (_next_id) is NOT called.
     return QueueItem(

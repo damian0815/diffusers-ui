@@ -17,6 +17,14 @@ Sampler = Literal[
 
 
 @dataclass
+class LoRAEntry:
+    name: str              # display name (filename sans extension)
+    filename: str          # e.g. "add_detail.safetensors"
+    path: str              # absolute path on disk
+    base_models: list[str] # detected compatibility ["sd-1", "sdxl", etc.]
+
+
+@dataclass
 class ImageGenerationParams:
     prompt: str
     negative_prompt: str
@@ -38,6 +46,8 @@ class ImageGenerationParams:
     crop_top: float = 0.0
     crop_width: float = 0.0         # 0 = no crop (backward compat)
     crop_height: float = 0.0
+    lora_keys: list[str] = field(default_factory=list)       # filenames
+    lora_strengths: list[float] = field(default_factory=list) # parallel list, same length
 
 
 @dataclass(frozen=True)
@@ -52,6 +62,7 @@ class CriticalParams:
     model_key: str
     prediction_type: str = 'default'
     init_image: str | None = None
+    lora_keys: tuple[str, ...] = ()
 
 
 class ItemStatus(str, Enum):

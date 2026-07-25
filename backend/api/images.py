@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from io import BytesIO
 import uuid
 
@@ -216,5 +217,7 @@ def _image_record_to_dict(record) -> dict:
         "crop_top": record.crop_top,
         "crop_width": record.crop_width,
         "crop_height": record.crop_height,
+        "lora_keys": json.loads(record.lora_keys) if record.lora_keys else [],
+        "lora_strengths": json.loads(record.lora_strengths) if record.lora_strengths else [],
     }
 

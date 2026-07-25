@@ -18,6 +18,7 @@ def get_critical_params(params: ImageGenerationParams) -> CriticalParams:
         cfg_rescale_multiplier=params.cfg_rescale_multiplier,
         sampler=params.sampler,
         model_key=params.model_key,
+        lora_keys=tuple(params.lora_keys),
     )
 
 

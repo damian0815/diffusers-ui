@@ -39,6 +39,10 @@ def _apply_inline_migrations(conn) -> None:
         ]:
             if col not in existing:
                 conn.execute(text(f"ALTER TABLE images ADD COLUMN {col} {coltype}"))
+        # Add lora_keys and lora_strengths columns
+        if "lora_keys" not in existing:
+            conn.execute(text("ALTER TABLE images ADD COLUMN lora_keys TEXT"))
+            conn.execute(text("ALTER TABLE images ADD COLUMN lora_strengths TEXT"))
     if "queue_items" in tables:
         existing = {c["name"] for c in inspector.get_columns("queue_items")}
         if "board_id" not in existing:
