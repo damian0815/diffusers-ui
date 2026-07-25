@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
+import re
 import threading
 import time
 import types
@@ -126,6 +127,7 @@ class PipelineWorker:
         broadcaster: PreviewBroadcaster,
         session_factory=None,
         default_board_id: str | None = None,
+        embedding_service=None,
     ):
         self._queue = queue
         self._registry = registry
@@ -133,6 +135,7 @@ class PipelineWorker:
         self._broadcaster = broadcaster
         self._session_factory = session_factory
         self._default_board_id = default_board_id
+        self._embedding_service = embedding_service
         self._running = False
         # _idle is SET when no generation is in flight; CLEARED while running one.
         self._idle = asyncio.Event()
@@ -370,6 +373,81 @@ class PipelineWorker:
             )
             self._loaded_loras = batch_lora_set.copy()
 
+    async def _apply_embedding(self, pipeline, embedding_path: str, name: str) -> None:
+        """Load a .safetensors TI and inject its weights into the text encoder.
+
+        Tokens are named ``name.0``, ``name.1``, … where *name* is the
+        embedding file stem (e.g. ``my_dog``).
+        """
+        try:
+            from safetensors.torch import load_file
+            embeds_dict = load_file(embedding_path)
+            tensor = embeds_dict[list(embeds_dict.keys())[0]]  # [num_vectors, dim]
+
+            tokenizer = pipeline.tokenizer
+            text_encoder = pipeline.text_encoder
+            num_vectors = tensor.shape[0]
+
+            tokens = [f"{name}.{i}" for i in range(num_vectors)]
+
+            # Only add tokens that aren't already present (idempotent for
+            # repeated batches with the same embedding).
+            existing = set(tokenizer.get_vocab().keys())
+            new_tokens = [t for t in tokens if t not in existing]
+            if new_tokens:
+                tokenizer.add_tokens(new_tokens)
+                text_encoder.resize_token_embeddings(len(tokenizer))
+
+            token_ids = tokenizer.convert_tokens_to_ids(tokens)
+            with torch.no_grad():
+                for i, tid in enumerate(token_ids):
+                    text_encoder.get_input_embeddings().weight[tid] = tensor[i]
+
+            logger.info("Applied TI embedding %r (%d vectors) from %s", name, num_vectors, embedding_path)
+        except Exception as e:
+            logger.error("Failed to apply TI embedding %s: %s", embedding_path, e)
+            raise
+
+    _EMBEDDING_RE = re.compile(r"<([^>]+)>")
+
+    async def _resolve_prompt_embeddings(
+        self, pipeline, prompts: list[str], neg_prompts: list[str]
+    ) -> tuple[list[str], list[str]]:
+        """Scan prompts for <name> tokens, load embeddings, rewrite prompts."""
+        if self._embedding_service is None:
+            return prompts, neg_prompts
+
+        # 1. Collect all unique names from both prompt lists.
+        all_text = " ".join(prompts + neg_prompts)
+        names = set(self._EMBEDDING_RE.findall(all_text))
+        if not names:
+            return prompts, neg_prompts
+
+        # 2. Load each embedding and patch the pipeline.
+        loaded: dict[str, int] = {}  # name → num_vectors
+        for name in names:
+            entry = self._embedding_service.get(name)
+            if entry is None:
+                logger.warning("TI embedding %r not found in embeddings_dir", name)
+                continue
+            await self._apply_embedding(pipeline, entry.path, name)
+            loaded[name] = entry.num_vectors
+
+        if not loaded:
+            return prompts, neg_prompts
+
+        # 3. Rewrite prompts.
+        def _rewrite(text: str) -> str:
+            def _replace(m: re.Match) -> str:
+                n = m.group(1)
+                k = loaded.get(n)
+                if k is None:
+                    return m.group(0)  # leave unresolved <name> as-is
+                return " ".join(f"{n}.{i}" for i in range(k))
+            return self._EMBEDDING_RE.sub(_replace, text)
+
+        return [_rewrite(p) for p in prompts], [_rewrite(p) for p in neg_prompts]
+
     async def _run_batch(self, batch: list[QueueItem]) -> bool:
         """Run a single batch: load model, generate, save, record.
 
@@ -421,12 +499,17 @@ class PipelineWorker:
         # Load and activate LoRAs for this batch
         await self._load_loras(pipeline, batch)
 
+        # Scan prompts for <name> TI tokens, load & rewrite
+        raw_prompts = [item.params.prompt for item in batch]
+        raw_neg = [item.params.negative_prompt for item in batch]
+        prompts, neg_prompts = await self._resolve_prompt_embeddings(
+            pipeline, raw_prompts, raw_neg
+        )
+
         for item in batch:
             await self._queue.mark_processing(item)
 
         params = batch[0].params  # all share critical params
-        prompts = [item.params.prompt for item in batch]
-        neg_prompts = [item.params.negative_prompt for item in batch]
         seeds = [item.params.seed for item in batch]
 
         # Encode prompts.

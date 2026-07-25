@@ -72,6 +72,17 @@ function app() {
     activeLoras: [],            // [{filename: "x.safetensors", strength: 1.0}, ...]
     _selectedLoraFile: '',      // dropdown binding for LoRA picker
 
+    // ---- Textual Inversion state ----
+    embeddings: [],
+    tiAutocomplete: {
+      visible: false,
+      matches: [],       // filtered EmbeddingEntry list
+      index: 0,          // keyboard selection index
+      top: 0,            // popup Y offset (px from textarea top)
+      left: 0,           // popup X offset
+      triggerStart: -1,  // char offset of the '<' that opened the popup
+    },
+
     // ---- Preview & aspect-ratio state ----
     showPreview: true,
     showInfoOverlay: false,
@@ -106,9 +117,11 @@ function app() {
       Layout.init();
       await this.loadModels();
       await this.fetchLoras();
+      await this.loadEmbeddings();
       this._updateResolutionStep();
       this.setupKeyboardShortcuts();
       this.loadWorkerStatus();
+      window.addEventListener('request-models-list', () => this.loadEmbeddings());
 
       // Initialise session-scoped state that can't be serialised as plain data
       this._finishedItemIds = new Set();
@@ -389,10 +402,10 @@ function app() {
           batch.crop_height = q.height / this.sourceImage.height;
         }
       }
-      if (this.activeLoras.length > 0) {
-        batch.lora_keys = this.activeLoras.map(l => l.filename);
-        batch.lora_strengths = this.activeLoras.map(l => l.strength);
-      }
+        if (this.activeLoras.length > 0) {
+          batch.lora_keys = this.activeLoras.map(l => l.filename);
+          batch.lora_strengths = this.activeLoras.map(l => l.strength);
+        }
       return { prepend, batch };
     },
 
@@ -498,6 +511,14 @@ function app() {
         const resp = await fetch('/api/v1/loras/');
         if (!resp.ok) return;
         this.loraEntries = await resp.json();
+      } catch (e) {}
+    },
+
+    async loadEmbeddings() {
+      try {
+        const resp = await fetch('/api/v1/training/embeddings');
+        if (!resp.ok) return;
+        this.embeddings = await resp.json();
       } catch (e) {}
     },
 
@@ -1401,6 +1422,57 @@ function app() {
     },
 
     _snap(n) { return Math.max(256, Math.round(n / this.resolutionStep) * this.resolutionStep); },
+
+    // ----------------------------------------------------------------
+    // Textual Inversion autocomplete
+    // ----------------------------------------------------------------
+
+    onPromptInput(event) {
+      const textarea = this.$refs.promptTextarea;
+      const pos = textarea.selectionStart;
+      const text = this.prompt;
+
+      // Find the last '<' before the cursor that isn't closed by a '>' before the cursor.
+      const before = text.slice(0, pos);
+      const ltIdx = before.lastIndexOf('<');
+      if (ltIdx === -1 || before.includes('>', ltIdx + 1)) {
+        this.tiAutocomplete.visible = false;
+        return;
+      }
+
+      const query = before.slice(ltIdx + 1).toLowerCase();
+      this.tiAutocomplete.triggerStart = ltIdx;
+      this.tiAutocomplete.matches = this.embeddings.filter(e =>
+        e.name.toLowerCase().includes(query)
+      );
+      this.tiAutocomplete.index = 0;
+      this.tiAutocomplete.visible = true;
+
+      // Position the popup near the cursor.
+      const lines = before.slice(ltIdx).split('\n');
+      this.tiAutocomplete.top = lines.length * 20 + 24;  // ~20px per line
+      this.tiAutocomplete.left = 8;
+    },
+
+    insertTiToken(name) {
+      const textarea = this.$refs.promptTextarea;
+      const pos = textarea.selectionStart;
+      const text = this.prompt;
+      const start = this.tiAutocomplete.triggerStart;
+
+      // Replace from '<' to cursor with '<name>'
+      const before = text.slice(0, start);
+      const after = text.slice(pos);
+      this.prompt = before + '<' + name + '>' + after;
+      this.tiAutocomplete.visible = false;
+
+      // Move cursor to after the inserted token
+      this.$nextTick(() => {
+        const newPos = start + name.length + 2;  // < + name + >
+        textarea.setSelectionRange(newPos, newPos);
+        textarea.focus();
+      });
+    },
 
     // ----------------------------------------------------------------
     // Gallery navigation

@@ -9,6 +9,26 @@ class GenerationCancelled(Exception):
     PipelineWorker._run_batch before the generic Exception handler so that
     OOM and real errors are still properly distinguished."""
 
+class TIStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPING = "stopping"
+
+@dataclass
+class TIState:
+    status: TIStatus = TIStatus.IDLE
+    config_name: str = ""
+    current_step: int = 0
+    total_steps: int = 0
+    train_loss: float = 0.0
+    val_loss: float | None = None
+    lr: float = 0.0
+    elapsed_seconds: float = 0.0
+    samples: list[str] = field(default_factory=list)  # validation image names
+    error: str | None = None
+    embedding_name: str = ""  # name of saved embedding file
+
 Sampler = Literal[
     'dpmpp_sde_k', 'dpmpp_sde', 'dpmpp_2m_sde_k', 'dpmpp_2m_sde',
     'dpmpp', 'dpmpp_2m', 'dpmpp_3m', 'euler', 'euler_a', 'ddim', 'lms', 'kdpm_2_a',

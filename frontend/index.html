@@ -7,6 +7,7 @@
   <script src="/app.js"     defer></script>
   <script src="/gallery.js" defer></script>
   <script src="/preview.js" defer></script>
+  <script src="/ti.js"      defer></script>
   <script src="/layout.js"  defer></script>
   <script src="/vendor/alpine.min.js" defer></script>
   <link rel="stylesheet" href="/style.css">
@@ -39,6 +40,10 @@
         Models
         <span class="nav-badge models-badge"
               x-show="models.length > 0" x-text="models.length"></span>
+      </button>
+      <button class="nav-tab" :class="{active: activeTab==='ti'}"
+              @click="activeTab='ti'" title="TI Training">
+        TI Training
       </button>
     </div>
 
@@ -139,9 +144,33 @@
             Auto-select latest
           </label>
 
-          <div class="field-group">
+          <div class="field-group prompt-field">
             <label class="field-label">Prompt</label>
-            <textarea x-model="prompt" rows="4" placeholder="Describe your image…"></textarea>
+            <div class="prompt-input-wrap">
+              <textarea x-model="prompt" rows="4" placeholder="Describe your image…"
+                        @input="onPromptInput($event)"
+                        @keydown.escape="tiAutocomplete.visible = false"
+                        @keydown.up.prevent="if(tiAutocomplete.visible) { tiAutocomplete.index = Math.max(0, tiAutocomplete.index - 1) }"
+                        @keydown.down.prevent="if(tiAutocomplete.visible) { tiAutocomplete.index = Math.min(tiAutocomplete.matches.length - 1, tiAutocomplete.index + 1) }"
+                        @keydown.enter.prevent="if(tiAutocomplete.visible && tiAutocomplete.matches.length) insertTiToken(tiAutocomplete.matches[tiAutocomplete.index].name)"
+                        @blur="setTimeout(() => tiAutocomplete.visible = false, 150)"
+                        x-ref="promptTextarea"></textarea>
+              <div class="ti-autocomplete"
+                   x-show="tiAutocomplete.visible"
+                   :style="`top: ${tiAutocomplete.top}px; left: ${tiAutocomplete.left}px`"
+                   @mousedown.prevent>
+                <template x-for="(e, idx) in tiAutocomplete.matches" :key="e.name">
+                  <div class="ti-ac-item"
+                       :class="{'active': idx === tiAutocomplete.index}"
+                       @mousedown.prevent="insertTiToken(e.name)"
+                       x-text="`<${e.name}>  (${e.num_vectors} vectors)`">
+                  </div>
+                </template>
+                <div x-show="tiAutocomplete.matches.length === 0" class="ti-ac-empty">
+                  No matching embeddings
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="field-group">
@@ -923,6 +952,155 @@
     </div>
 
   </div><!-- /#errors-view -->
+
+
+  <!-- ═══ VIEW: TI TRAINING ══════════════════════════════ -->
+  <div id="ti-view" x-show="activeTab === 'ti'" x-data="ti()">
+    <div class="fs-header">
+      <div class="fs-header-left">
+        <h1 class="fs-title">Textual Inversion Training</h1>
+      </div>
+    </div>
+
+    <div class="fs-body ti-layout">
+      <div class="ti-left">
+        <div class="ti-config">
+          <h3>Configuration</h3>
+          
+          <div class="field-group">
+            <label class="field-label">Source Gallery</label>
+            <select x-model="config.gallery_id">
+              <template x-for="g in galleries" :key="g.board_id">
+                <option :value="g.board_id" x-text="`${g.board_name} (${g.image_count || 0} images)`"></option>
+              </template>
+            </select>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Base Model</label>
+            <select x-model="config.model_key">
+              <template x-for="m in models" :key="m.key">
+                <option :value="m.key" x-text="m.name"></option>
+              </template>
+            </select>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label class="field-label">Placeholder Token</label>
+              <input type="text" x-model="config.placeholder_token" placeholder="<sks>">
+            </div>
+            <div class="field">
+              <label class="field-label">Initializer Token</label>
+              <input type="text" x-model="config.initializer_token" placeholder="dog">
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label class="field-label">Num Vectors</label>
+              <input type="number" x-model.number="config.num_vectors" min="1" max="12">
+            </div>
+            <div class="field">
+              <label class="field-label">Property</label>
+              <select x-model="config.learnable_property">
+                <option value="object">Object</option>
+                <option value="style">Style</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <div class="row">
+            <div class="field">
+              <label class="field-label">Steps</label>
+              <input type="number" x-model.number="config.max_train_steps" min="10" max="10000">
+            </div>
+            <div class="field">
+              <label class="field-label">Learning Rate</label>
+              <input type="number" x-model.number="config.learning_rate" step="0.0001">
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Output Name</label>
+            <input type="text" x-model="config.output_name">
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Validation Prompt</label>
+            <input type="text" x-model="config.validation_prompt" placeholder="Optional prompt for sample images">
+          </div>
+
+          <div class="ti-actions">
+            <button class="btn-primary" @click="startTraining()"
+                    :disabled="status === 'running' || !config.gallery_id || !config.model_key">
+              <span x-text="status === 'running' ? 'Training...' : 'Start Training'"></span>
+            </button>
+            <button class="btn-secondary" @click="pauseTraining()" x-show="status === 'running'">Pause</button>
+            <button class="btn-primary" @click="resumeTraining()" x-show="status === 'paused'">Resume</button>
+            <button class="btn-secondary danger" @click="stopTraining()" 
+                    x-show="status === 'running' || status === 'paused'">Stop</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ti-right">
+        <div class="ti-status" x-show="status !== 'idle'">
+          <div class="ti-progress-bar">
+            <div class="ti-progress-fill" :style="`width: ${(currentStep / totalSteps) * 100}%`"></div>
+          </div>
+          <div class="ti-stats">
+            <span>Step <strong x-text="currentStep"></strong> / <strong x-text="totalSteps"></strong></span>
+            <span>Loss: <strong x-text="trainLoss.toFixed(4)"></strong></span>
+            <span x-show="valLoss !== null">Val: <strong x-text="valLoss.toFixed(4)"></strong></span>
+            <span>Time: <strong x-text="formatTime(elapsed)"></strong></span>
+          </div>
+        </div>
+
+        <div class="ti-samples" x-show="samples.length > 0">
+          <h4>Validation Samples</h4>
+          <div class="ti-sample-grid">
+            <template x-for="s in samples">
+              <img :src="`/api/v1/images/i/${s}/thumbnail`" class="ti-sample-img">
+            </template>
+          </div>
+        </div>
+
+        <div class="ti-embeddings">
+          <h4>Saved Embeddings</h4>
+          <table class="embeddings-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Token</th>
+                <th>Vectors</th>
+                <th>Dim</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="e in embeddings" :key="e.name">
+                <tr>
+                  <td x-text="e.name"></td>
+                  <td x-text="e.token"></td>
+                  <td x-text="e.num_vectors"></td>
+                  <td x-text="e.embedding_dim"></td>
+                  <td>
+                    <button class="icon-btn sm danger" @click="deleteEmbedding(e.name)" title="Delete">✕</button>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="embeddings.length === 0">
+                <td colspan="5" class="hint" style="text-align:center">No embeddings saved yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div><!-- /#ti-view -->
 
 
   <!-- ═══ VIEW: MODELS ════════════════════════════════════ -->

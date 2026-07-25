@@ -24,7 +24,9 @@ from backend.model_registry.registry import ModelRegistry
 from backend.model_registry.loader import PipelineLoader
 from backend.pipeline.preview import PreviewBroadcaster
 from backend.pipeline.worker import PipelineWorker
-from backend.api import queue, images, boards, models, websocket, loras
+from backend.training.trainer import TITrainer
+from backend.training.embeddings import EmbeddingService
+from backend.api import queue, images, boards, models, websocket, loras, training
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,9 @@ queue_manager = QueueManager(store=queue_store)
 model_registry = ModelRegistry(settings.models_json)
 pipeline_loader = PipelineLoader()
 broadcaster = PreviewBroadcaster()
+embedding_service = EmbeddingService()
+embedding_service.scan()
+
 worker = PipelineWorker(
     queue=queue_manager,
     registry=model_registry,
@@ -43,7 +48,11 @@ worker = PipelineWorker(
     broadcaster=broadcaster,
     session_factory=AsyncSessionLocal,
     default_board_id=None,  # set during lifespan startup
+    embedding_service=embedding_service,
 )
+
+ti_trainer = TITrainer(pipeline_loader, model_registry, broadcaster,
+                       embedding_service=embedding_service)
 
 
 @asynccontextmanager
@@ -195,6 +204,8 @@ app.state.registry = model_registry
 app.state.broadcaster = broadcaster
 app.state.loader = pipeline_loader
 app.state.worker = worker
+app.state.ti_trainer = ti_trainer
+app.state.embeddings = embedding_service
 
 app.include_router(queue.router)
 app.include_router(images.router)
@@ -202,6 +213,7 @@ app.include_router(boards.router)
 app.include_router(models.router)
 app.include_router(websocket.router)
 app.include_router(loras.router)
+app.include_router(training.router)
 
 # Serve the frontend as static files (must be last — catch-all)
 _frontend_dir = Path(__file__).parent.parent / "frontend"

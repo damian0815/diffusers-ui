@@ -28,6 +28,7 @@ class Settings:
     thumbnail_size: tuple[int, int] = (256, 256)
     batch_window_s: float = 0.3   # how long to wait collecting items before batching
     loras_dir: Path = field(default_factory=lambda: Path("loras"))
+    embeddings_dir: Path = field(default_factory=lambda: Path("embeddings"))
     preview_every_n_steps: int = 1
     # Preview method: "taesd" (higher quality, uses tiny neural decoder) or
     # "approx" (linear RGB projection — fast, no extra weights required).
