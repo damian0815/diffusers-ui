@@ -10,6 +10,7 @@ class TIConfig:
     initializer_token: str = "dog"     # seed word for initial embedding
     num_vectors: int = 1               # multi-vector TI
     learnable_property: str = "object" # "object" or "style"
+    class_prompt: str = ""             # class word appended after TI tokens
     repeats: int = 100                 # dataset repeats
 
     # Model

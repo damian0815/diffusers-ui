@@ -1497,6 +1497,8 @@ function app() {
 
         if (meta && e.key === 'Enter') { e.preventDefault(); this.generate(e.shiftKey); return; }
 
+        if (!isTyping && !meta && !e.altKey && e.key === '*') { e.preventDefault(); this.toggleStar(); return; }
+
         if (!isTyping && !meta && !e.altKey && !e.shiftKey) {
           switch (e.key.toUpperCase()) {
             case '1': e.preventDefault(); this.activeTab = 'generate'; break;

@@ -1,12 +1,12 @@
 import random
 from pathlib import Path
 
-import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
 
 from backend.config import settings
+from backend.training.aspects import get_aspect_buckets, compute_resolution_options
 
 imagenet_templates_small = [
     "a photo of a {}",
@@ -60,7 +60,8 @@ imagenet_style_templates_small = [
 class TextualInversionDataset(Dataset):
     """
     Loads images from a gallery directory (settings.images_dir).
-    Applies random horizontal flip, center crop, and resize.
+    Applies aspect-ratio-aware resize (via aspects.compute_resolution_options) then
+    random crop, random horizontal flip.
     Returns {pixel_values, input_ids} pairs.
     """
 
@@ -72,22 +73,44 @@ class TextualInversionDataset(Dataset):
         size: int = 512,
         repeats: int = 100,
         learnable_property: str = "object",
-        center_crop: bool = False,
+        class_prompt: str = "",
     ):
-        self.image_paths = [settings.images_dir / name for name in image_names]
         self.tokenizer = tokenizer
         self.placeholder_token = placeholder_token
         self.size = size
-        self.center_crop = center_crop
-        self._length = len(self.image_paths) * repeats
+        self.class_prompt = class_prompt
+        self._length = len(image_names) * repeats
         self.templates = (
             imagenet_style_templates_small
             if learnable_property == "style"
             else imagenet_templates_small
         )
-        self.transform = transforms.Compose([
-            transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
+
+        buckets = get_aspect_buckets(size)
+        aspects_per_resolution = {size: buckets}
+
+        self._entries: list[tuple[Path, int, int]] = []
+        for name in image_names:
+            path = settings.images_dir / name
+            try:
+                with Image.open(path) as img:
+                    w, h = img.size
+                result = compute_resolution_options(w, h, aspects_per_resolution)
+                target_wh = result[size].target_wh
+                bw, bh = target_wh
+                if bw >= bh:
+                    tw, th = round(size * bw / bh), size
+                else:
+                    tw, th = size, round(size * bh / bw)
+            except Exception:
+                tw, th = size, size
+            self._entries.append((path, tw, th))
+
+    def _build_transform(self, target_w: int, target_h: int) -> transforms.Compose:
+        return transforms.Compose([
+            transforms.Resize((target_h, target_w),
+                               interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomCrop(self.size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
@@ -97,8 +120,12 @@ class TextualInversionDataset(Dataset):
         return self._length
 
     def __getitem__(self, i):
-        image = Image.open(self.image_paths[i % len(self.image_paths)]).convert("RGB")
-        text = random.choice(self.templates).format(self.placeholder_token)
+        path, tw, th = self._entries[i % len(self._entries)]
+        image = Image.open(path).convert("RGB")
+        transform = self._build_transform(tw, th)
+
+        suffix = f" {self.class_prompt}" if self.class_prompt else ""
+        text = random.choice(self.templates).format(self.placeholder_token) + suffix
         input_ids = self.tokenizer(
             text,
             padding="max_length",
@@ -106,4 +133,4 @@ class TextualInversionDataset(Dataset):
             max_length=self.tokenizer.model_max_length,
             return_tensors="pt",
         ).input_ids[0]
-        return {"pixel_values": self.transform(image), "input_ids": input_ids}
+        return {"pixel_values": transform(image), "input_ids": input_ids}

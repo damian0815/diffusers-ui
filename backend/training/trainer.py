@@ -12,17 +12,17 @@ import torch.nn.functional as F
 import safetensors.torch
 from torch import nn
 from torch.utils.data import DataLoader, random_split
-from transformers import AdamW
+from torch.optim import AdamW
 
 from backend.config import settings
-from backend.domain import TIConfig, TIStatus, TIState
+from backend.domain import TIStatus, TIState
+from backend.training.config import TIConfig
 from backend.training.dataset import TextualInversionDataset
 
-if TYPE_CHECKING:
-    from backend.model_registry.loader import PipelineLoader
-    from backend.model_registry.registry import ModelRegistry
-    from backend.pipeline.preview import PreviewBroadcaster
-    from backend.training.embeddings import EmbeddingService
+from backend.model_registry.loader import PipelineLoader
+from backend.model_registry.registry import ModelRegistry
+from backend.pipeline.preview import PreviewBroadcaster
+from backend.training.embeddings import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,8 @@ class TITrainer:
             dataset = TextualInversionDataset(
                 image_names, tokenizer, self._config.placeholder_token,
                 self._config.resolution, self._config.repeats,
-                self._config.learnable_property, self._config.center_crop
+                self._config.learnable_property,
+                class_prompt=self._config.class_prompt,
             )
             dataloader = DataLoader(dataset, batch_size=self._config.train_batch_size, shuffle=True)
 
@@ -259,16 +260,7 @@ class TITrainer:
         total_loss = 0.0
         count = 0
         
-        # Save RNG states before validation
-        py_state = random.getstate()
-        np_state = np.random.get_state()
-        torch_state = torch.random.get_rng_state()
-        cuda_states = []
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                cuda_states.append(torch.cuda.get_rng_state(i))
-
-        try:
+        with isolate_rng():
             torch.manual_seed(config.validation_seed)
             random.seed(config.validation_seed)
             np.random.seed(config.validation_seed)
@@ -309,14 +301,8 @@ class TITrainer:
                     img.save(settings.images_dir / name)
                     sample_images.append(name)
                 del pipe
-        finally:
-            # Restore RNG states
-            random.setstate(py_state)
-            np.random.set_state(np_state)
-            torch.random.set_rng_state(torch_state)
-            for i, state in enumerate(cuda_states):
-                torch.cuda.set_rng_state(state, i)
-            text_encoder.train()
+
+        text_encoder.train()
 
         return total_loss / max(count, 1), sample_images
 

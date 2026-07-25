@@ -21,6 +21,7 @@ dependencies = [
     "bitsandbytes",
     "python-multipart",
     "safetensors>=0.4",
+    "torchvision>=0.27.1",
 ]
 
 [project.optional-dependencies]

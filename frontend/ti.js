@@ -7,6 +7,7 @@ function ti() {
             initializer_token: 'dog',
             num_vectors: 1,
             learnable_property: 'object',
+            class_prompt: '',
             model_key: '',
             resolution: 512,
             max_train_steps: 500,

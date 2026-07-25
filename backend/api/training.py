@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from backend.domain import TIConfig
+from backend.training.config import TIConfig
 
 router = APIRouter(prefix="/api/v1/training", tags=["training"])
 
@@ -10,6 +10,7 @@ class TIStartRequest(BaseModel):
     initializer_token: str = "dog"
     num_vectors: int = 1
     learnable_property: str = "object"
+    class_prompt: str = ""
     repeats: int = 100
     model_key: str
     resolution: int = 512
