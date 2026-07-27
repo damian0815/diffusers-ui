@@ -26,6 +26,10 @@ function ti() {
         models: [],
         currentStep: 0,
         totalSteps: 0,
+        currentEpoch: 0,
+        totalEpochs: 0,
+        stepsInEpoch: 0,
+        totalStepsInEpoch: 0,
         trainLoss: 0,
         valLoss: null,
         lr: 0,
@@ -33,6 +37,7 @@ function ti() {
         samples: [],
         embeddings: [],
         error: null,
+        generatingSamples: false,
 
         async init() {
             await this.loadGalleries();
@@ -43,11 +48,12 @@ function ti() {
 
         listenForEvents() {
             window.addEventListener('ws-gallery-event', (e) => {
-                const {type, data} = e.detail;
-                if (type === 'ti_progress') this.updateProgress(data);
-                if (type === 'ti_validation') this.updateValidation(data);
-                if (type === 'ti_complete') this.onComplete(data);
-                if (type === 'ti_error') this.onError(data);
+                const {event, data} = e.detail;
+                if (event === 'ti_progress') this.updateProgress(data);
+                if (event === 'ti_validation') this.updateValidation(data);
+                if (event === 'ti_complete') this.onComplete(data);
+                if (event === 'ti_error') this.onError(data);
+                if (event === 'ti_sample_status') this.onSampleStatus(data);
             });
         },
 
@@ -60,8 +66,9 @@ function ti() {
         },
 
         async loadModels() {
-            const res = await fetch('/api/v1/models/');
-            this.models = (await res.json()).filter(m => m.base !== 'sana');
+            const res = await fetch('/api/v2/models/');
+            const data = await res.json();
+            this.models = data.models || []
             if (this.models.length > 0 && !this.config.model_key) {
                 this.config.model_key = this.models[0].key;
             }
@@ -101,6 +108,14 @@ function ti() {
             await fetch('/api/v1/training/stop', { method: 'PUT' });
         },
 
+        async generateSamples() {
+            await fetch('/api/v1/training/samples', { method: 'POST' });
+        },
+
+        async cancelSamples() {
+            await fetch('/api/v1/training/samples/cancel', { method: 'PUT' });
+        },
+
         async deleteEmbedding(name) {
             if (confirm(`Delete embedding ${name}?`)) {
                 await fetch(`/api/v1/training/embeddings/${name}`, { method: 'DELETE' });
@@ -114,6 +129,10 @@ function ti() {
             this.status = 'running';
             this.currentStep = data.current_step;
             this.totalSteps = data.total_steps;
+            this.currentEpoch = data.current_epoch;
+            this.totalEpochs = data.total_epochs;
+            this.stepsInEpoch = data.steps_in_epoch;
+            this.totalStepsInEpoch = data.total_steps_in_epoch;
             this.trainLoss = data.train_loss;
             this.lr = data.lr;
             this.elapsed = data.elapsed_seconds;
@@ -122,6 +141,10 @@ function ti() {
         updateValidation(data) {
             this.valLoss = data.val_loss;
             this.samples = data.samples;
+        },
+
+        onSampleStatus(data) {
+            this.generatingSamples = data.generating;
         },
 
         onComplete(data) {

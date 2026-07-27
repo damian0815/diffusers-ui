@@ -21,6 +21,10 @@ class TIState:
     config_name: str = ""
     current_step: int = 0
     total_steps: int = 0
+    current_epoch: int = 0
+    total_epochs: int = 0
+    steps_in_epoch: int = 0
+    total_steps_in_epoch: int = 0
     train_loss: float = 0.0
     val_loss: float | None = None
     lr: float = 0.0
@@ -28,6 +32,7 @@ class TIState:
     samples: list[str] = field(default_factory=list)  # validation image names
     error: str | None = None
     embedding_name: str = ""  # name of saved embedding file
+    generating_samples: bool = False  # True when on-demand sample generation is running
 
 Sampler = Literal[
     'dpmpp_sde_k', 'dpmpp_sde', 'dpmpp_2m_sde_k', 'dpmpp_2m_sde',

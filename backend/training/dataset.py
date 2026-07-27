@@ -126,11 +126,12 @@ class TextualInversionDataset(Dataset):
 
         suffix = f" {self.class_prompt}" if self.class_prompt else ""
         text = random.choice(self.templates).format(self.placeholder_token) + suffix
-        input_ids = self.tokenizer(
+        #print("tokenzining text:", text)
+        tokenization_output = self.tokenizer(
             text,
             padding="max_length",
             truncation=True,
             max_length=self.tokenizer.model_max_length,
             return_tensors="pt",
-        ).input_ids[0]
-        return {"pixel_values": transform(image), "input_ids": input_ids}
+        )
+        return {"pixel_values": transform(image), "attention_mask": tokenization_output.attention_mask[0], "input_ids": tokenization_output.input_ids[0]}

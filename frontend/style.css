@@ -1745,6 +1745,29 @@ select option { background: var(--surface); }
   border-radius: 3px;
 }
 
+.ti-progress-section {
+  margin-bottom: 12px;
+}
+
+.ti-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+
+.ti-progress-label strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.ti-sample-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
 .ti-stats {
   display: flex;
   gap: 24px;

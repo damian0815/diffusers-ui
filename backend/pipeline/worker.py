@@ -379,6 +379,8 @@ class PipelineWorker:
         Tokens are named ``name.0``, ``name.1``, … where *name* is the
         embedding file stem (e.g. ``my_dog``).
         """
+        import torch
+
         try:
             from safetensors.torch import load_file
             embeds_dict = load_file(embedding_path)
@@ -403,7 +405,7 @@ class PipelineWorker:
                 for i, tid in enumerate(token_ids):
                     text_encoder.get_input_embeddings().weight[tid] = tensor[i]
 
-            logger.info("Applied TI embedding %r (%d vectors) from %s", name, num_vectors, embedding_path)
+            logger.info("Applied TI embedding %r (%d vectors) from %s - mean weights %s", name, num_vectors, embedding_path, f'{tensor.mean(dim=1)}')
         except Exception as e:
             logger.error("Failed to apply TI embedding %s: %s", embedding_path, e)
             raise

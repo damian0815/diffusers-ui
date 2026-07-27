@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(worker.run())
 
     # Optionally start paused (set START_PAUSED=1)
-    if os.environ.get("START_PAUSED"):
+    if os.environ.get("START_PAUSED", "0") == "1":
         worker.pause()
         logger.info("Worker started in paused state (START_PAUSED is set).")
 

@@ -49,6 +49,9 @@ def _apply_inline_migrations(conn) -> None:
             conn.execute(text("ALTER TABLE queue_items ADD COLUMN board_id VARCHAR"))
         if "prediction_type" not in existing:
             conn.execute(text("ALTER TABLE queue_items ADD COLUMN prediction_type VARCHAR NOT NULL DEFAULT 'default'"))
+        if "lora_keys" not in existing:
+            conn.execute(text("ALTER TABLE queue_items ADD COLUMN lora_keys TEXT"))
+            conn.execute(text("ALTER TABLE queue_items ADD COLUMN lora_strengths TEXT"))
 
 
 async def init_db() -> None:

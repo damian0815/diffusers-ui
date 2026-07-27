@@ -955,7 +955,8 @@
 
 
   <!-- ═══ VIEW: TI TRAINING ══════════════════════════════ -->
-  <div id="ti-view" x-show="activeTab === 'ti'" x-data="ti()">
+  <div id="ti-view" x-show="activeTab === 'ti'" x-data="ti()"
+       x-effect="if (activeTab === 'ti') { loadGalleries(); loadEmbeddings(); }">
     <div class="fs-header">
       <div class="fs-header-left">
         <h1 class="fs-title">Textual Inversion Training</h1>
@@ -1049,24 +1050,63 @@
             <button class="btn-secondary danger" @click="stopTraining()" 
                     x-show="status === 'running' || status === 'paused'">Stop</button>
           </div>
+
+          <div class="nav-error" x-show="error" x-transition style="margin-top: 0.5rem;">
+            <span x-text="error"></span>
+            <button @click="error = null">✕</button>
+          </div>
         </div>
       </div>
 
       <div class="ti-right">
         <div class="ti-status" x-show="status !== 'idle'">
-          <div class="ti-progress-bar">
-            <div class="ti-progress-fill" :style="`width: ${(currentStep / totalSteps) * 100}%`"></div>
+          <div class="ti-progress-section">
+            <div class="ti-progress-label">
+              <span>Epoch <strong x-text="currentEpoch"></strong> / <strong x-text="totalEpochs"></strong></span>
+              <span x-text="`${totalEpochs ? ((currentEpoch - 1) / totalEpochs * 100).toFixed(1) : 0}%`"></span>
+            </div>
+            <div class="ti-progress-bar">
+              <div class="ti-progress-fill" :style="`width: ${totalEpochs ? ((currentEpoch - 1) / totalEpochs) * 100 : 0}%`"></div>
+            </div>
           </div>
+
+          <div class="ti-progress-section">
+            <div class="ti-progress-label">
+              <span>Step <strong x-text="stepsInEpoch"></strong> / <strong x-text="totalStepsInEpoch"></strong> in epoch</span>
+              <span x-text="`${totalStepsInEpoch ? ((stepsInEpoch - 1) / totalStepsInEpoch * 100).toFixed(1) : 0}%`"></span>
+            </div>
+            <div class="ti-progress-bar">
+              <div class="ti-progress-fill" :style="`width: ${totalStepsInEpoch ? ((stepsInEpoch - 1) / totalStepsInEpoch) * 100 : 0}%`"></div>
+            </div>
+          </div>
+
+          <div class="ti-progress-section">
+            <div class="ti-progress-label">
+              <span>Global step <strong x-text="currentStep"></strong> / <strong x-text="totalSteps"></strong></span>
+              <span x-text="`${totalSteps ? ((currentStep - 1) / totalSteps * 100).toFixed(1) : 0}%`"></span>
+            </div>
+            <div class="ti-progress-bar">
+              <div class="ti-progress-fill" :style="`width: ${totalSteps ? ((currentStep - 1) / totalSteps) * 100 : 0}%`"></div>
+            </div>
+          </div>
+
           <div class="ti-stats">
-            <span>Step <strong x-text="currentStep"></strong> / <strong x-text="totalSteps"></strong></span>
             <span>Loss: <strong x-text="trainLoss.toFixed(4)"></strong></span>
-            <span x-show="valLoss !== null">Val: <strong x-text="valLoss.toFixed(4)"></strong></span>
+            <template x-if="valLoss !== null"><span>Val: <strong x-text="valLoss.toFixed(4)"></strong></span></template>
+            <span>LR: <strong x-text="lr.toExponential(2)"></strong></span>
             <span>Time: <strong x-text="formatTime(elapsed)"></strong></span>
           </div>
         </div>
 
+        <div class="ti-sample-actions" x-show="status !== 'idle' && config.validation_prompt">
+          <button class="btn-secondary" @click="generateSamples()" :disabled="generatingSamples">
+            <span x-text="generatingSamples ? 'Generating...' : 'Generate Samples'"></span>
+          </button>
+          <button class="btn-secondary danger" @click="cancelSamples()" x-show="generatingSamples">Cancel</button>
+        </div>
+
         <div class="ti-samples" x-show="samples.length > 0">
-          <h4>Validation Samples</h4>
+          <h4>Samples</h4>
           <div class="ti-sample-grid">
             <template x-for="s in samples">
               <img :src="`/api/v1/images/i/${s}/thumbnail`" class="ti-sample-img">

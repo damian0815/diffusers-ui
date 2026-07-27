@@ -30,7 +30,7 @@ class TIConfig:
     adam_epsilon: float = 1e-8
     gradient_accumulation_steps: int = 1
     gradient_checkpointing: bool = False
-    mixed_precision: str = "no"        # no, fp16, bf16
+    mixed_precision: str = "bf16"        # no, fp16, bf16
     seed: int = 42
 
     # Validation

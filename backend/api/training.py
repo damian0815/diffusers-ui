@@ -20,7 +20,7 @@ class TIStartRequest(BaseModel):
     learning_rate: float = 5e-4
     lr_scheduler: str = "constant"
     lr_warmup_steps: int = 100
-    mixed_precision: str = "no"
+    mixed_precision: str = "bf16"
     seed: int = 42
     validation_prompt: str = ""
     validation_steps: int = 100
@@ -56,6 +56,20 @@ async def stop_training(request: Request):
     trainer = request.app.state.ti_trainer
     trainer.stop()
     return {"status": "stopping"}
+
+@router.post("/samples")
+async def generate_samples(request: Request):
+    trainer = request.app.state.ti_trainer
+    if not trainer.is_running:
+        raise HTTPException(status_code=400, detail="Training is not running")
+    trainer.request_samples()
+    return {"status": "requested"}
+
+@router.put("/samples/cancel")
+async def cancel_samples(request: Request):
+    trainer = request.app.state.ti_trainer
+    trainer.cancel_samples()
+    return {"status": "cancelled"}
 
 @router.get("/status")
 async def training_status(request: Request):
