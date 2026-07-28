@@ -78,6 +78,21 @@ def _apply_weight_offsets(training_token_ids, original_embeddings, offsets):
     offset_weight.index_add_(0, training_token_ids, offsets)
     return offset_weight
 
+class EmbeddingEMA:
+    """Exponential moving average of embedding offsets for stable saved output."""
+
+    def __init__(self, offsets: nn.Parameter, decay: float = 0.9999):
+        self.decay = decay
+        self.shadow = offsets.data.clone()
+
+    @torch.no_grad()
+    def update(self, offsets: nn.Parameter):
+        self.shadow.mul_(self.decay).add_(offsets.data, alpha=1 - self.decay)
+
+    def get(self) -> torch.Tensor:
+        return self.shadow.clone()
+
+
 class TITrainer:
     def __init__(self, loader: PipelineLoader, registry: ModelRegistry, broadcaster: PreviewBroadcaster,
                  embedding_service: EmbeddingService | None = None):
@@ -189,8 +204,10 @@ class TITrainer:
             embeddings_layer.training_token_ids = torch.tensor(placeholder_token_ids, device=text_encoder.device, dtype=torch.long)
             embeddings_layer.embedding_offsets_individual = offsets
             handle = embeddings_layer.register_forward_hook(_embedding_forward_with_offsets)
-            self._training_token_ids = placeholder_token_ids
+            self._training_token_ids = embeddings_layer.training_token_ids
             self._offsets = offsets
+
+            ema = EmbeddingEMA(offsets, decay=0.998)
 
             # Prepare dataset
             from backend.gallery.service import GalleryService
@@ -210,6 +227,8 @@ class TITrainer:
                 self._config.resolution, self._config.repeats,
                 self._config.learnable_property,
                 class_prompt=self._config.class_prompt,
+                num_vectors=self._config.num_vectors,
+                augment_max_rotation_degrees=self._config.augment_max_rotation_degrees,
             )
             dataloader = DataLoader(dataset, batch_size=self._config.train_batch_size, shuffle=True)
 
@@ -248,6 +267,17 @@ class TITrainer:
             self._state.total_steps_in_epoch = steps_per_epoch
 
             global_step = 0
+
+            # Generate initial samples at step 0 before training starts
+            if self._config.validation_prompt:
+                val_loss, val_images = await self._run_validation(
+                    text_encoder, vae, denoising_model, noise_scheduler, tokenizer,
+                    val_dataloader, self._config, weight_dtype
+                )
+                self._state.val_loss = val_loss
+                self._state.samples = val_images
+                await self._broadcaster.broadcast_event("ti_validation", self._state.__dict__)
+
             epoch_pbar = tqdm(range(total_epochs), desc="Epochs", unit="epoch", position=0)
             for epoch in epoch_pbar:
                 if self._stop_requested:
@@ -329,6 +359,7 @@ class TITrainer:
                     loss.backward()
                     optimizer.step()
                     optimizer.zero_grad()
+                    ema.update(offsets)
 
                     global_step += 1
                     self._state.current_step = global_step
@@ -341,6 +372,7 @@ class TITrainer:
                     epoch_pbar.set_postfix(step=f"{global_step}/{self._config.max_train_steps}", loss=f"{loss.item():.4f}", refresh=False)
 
                     await self._broadcaster.broadcast_event("ti_progress", self._state.__dict__)
+                    await asyncio.sleep(0)
 
                     if global_step % self._config.validation_steps == 0:
                         val_loss, val_images = await self._run_validation(
@@ -352,7 +384,7 @@ class TITrainer:
                         await self._broadcaster.broadcast_event("ti_validation", self._state.__dict__)
 
                     if global_step % self._config.save_steps == 0:
-                        await self._save_embeddings(text_encoder, placeholder_token_ids, self._offsets, global_step)
+                        await self._save_embeddings(text_encoder, self._training_token_ids, ema.get(), global_step)
 
                     if global_step >= self._config.max_train_steps:
                         break
@@ -365,7 +397,7 @@ class TITrainer:
             epoch_pbar.close()
 
             # Final save
-            await self._save_embeddings(text_encoder, placeholder_token_ids, self._offsets, None)
+            await self._save_embeddings(text_encoder, self._training_token_ids, ema.get(), None)
 
             self._state.status = TIStatus.IDLE
             await self._broadcaster.broadcast_event("ti_complete", {"final_loss": self._state.train_loss})
@@ -531,10 +563,10 @@ class TITrainer:
             self._state.generating_samples = False
             await self._broadcaster.broadcast_event("ti_sample_status", {"generating": False})
 
-    async def _save_embeddings(self, text_encoder, placeholder_token_ids, offsets, step):
-        merged = _apply_weight_offsets(training_token_ids=torch.tensor(placeholder_token_ids, device=text_encoder.device), original_embeddings=text_encoder.get_input_embeddings(), offsets=offsets)
-        logging.info(f"extracting embeddings for placeholder tokens: {placeholder_token_ids}")
-        embeds = merged[placeholder_token_ids].detach().cpu()
+    async def _save_embeddings(self, text_encoder, training_token_ids, offsets, step):
+        merged = _apply_weight_offsets(training_token_ids, text_encoder.get_input_embeddings(), offsets)
+        embeds = merged[training_token_ids].detach().cpu()
+        logging.info(f"extracting embeddings for placeholder tokens: {training_token_ids.tolist()}. means: {embeds.mean(dim=1)}")
 
         embed_dict = {self._config.placeholder_token: embeds}
         suffix = f"-step{step}" if step else ""
@@ -550,7 +582,8 @@ class TITrainer:
             self._embedding_service.rescan()
 
 def _add_tokens(tokenizer, config):
-    placeholder_tokens = [f"{config.placeholder_token}.{i}" for i in range(config.num_vectors)]
+    bare_name = config.placeholder_token.strip("<>")
+    placeholder_tokens = [f"{bare_name}.{i}" for i in range(config.num_vectors)]
     tokenizer.add_tokens(placeholder_tokens)
     return tokenizer.convert_tokens_to_ids(placeholder_tokens)
 

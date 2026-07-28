@@ -270,6 +270,12 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   text-transform: uppercase;
 }
 
+.field-error {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 2px;
+}
+
 textarea, input[type="text"], input[type="number"], select {
   width: 100%;
   background: var(--input-bg);
@@ -1716,6 +1722,19 @@ select option { background: var(--surface); }
   font-size: 16px;
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+.ti-project-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.ti-project-bar select {
+  flex: 1;
+  min-width: 0;
 }
 
 .ti-actions {

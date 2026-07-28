@@ -24,6 +24,8 @@ function ti() {
         },
         galleries: [],
         models: [],
+        projects: [],
+        currentProjectId: null,
         currentStep: 0,
         totalSteps: 0,
         currentEpoch: 0,
@@ -40,9 +42,13 @@ function ti() {
         generatingSamples: false,
 
         async init() {
-            await this.loadGalleries();
-            await this.loadModels();
-            await this.loadEmbeddings();
+            await Promise.all([
+                this.loadGalleries(),
+                this.loadModels(),
+                this.loadEmbeddings(),
+                this.loadStatus(),
+                this.loadProjects(),
+            ]);
             this.listenForEvents();
         },
 
@@ -77,6 +83,33 @@ function ti() {
         async loadEmbeddings() {
             const res = await fetch('/api/v1/training/embeddings');
             this.embeddings = await res.json();
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/api/v1/training/status');
+                if (!res.ok) return;
+                const s = await res.json();
+                if (!s.status || s.status === 'idle') return;
+                this.status = s.status;
+                this.currentStep = s.current_step;
+                this.totalSteps = s.total_steps;
+                this.currentEpoch = s.current_epoch;
+                this.totalEpochs = s.total_epochs;
+                this.stepsInEpoch = s.steps_in_epoch;
+                this.totalStepsInEpoch = s.total_steps_in_epoch;
+                this.trainLoss = s.train_loss;
+                this.lr = s.lr;
+                this.elapsed = s.elapsed_seconds;
+                this.valLoss = s.val_loss;
+                this.samples = s.samples || [];
+                this.generatingSamples = s.generating_samples || false;
+            } catch (_) {}
+        },
+
+        get tokenValid() {
+            const t = this.config.placeholder_token;
+            return t.startsWith('<') && t.endsWith('>') && t.length >= 3;
         },
 
         async startTraining() {
@@ -114,6 +147,54 @@ function ti() {
 
         async cancelSamples() {
             await fetch('/api/v1/training/samples/cancel', { method: 'PUT' });
+        },
+
+        async loadProjects() {
+            const res = await fetch('/api/v1/training/projects');
+            this.projects = await res.json();
+        },
+
+        async saveProject() {
+            let name;
+            if (this.currentProjectId) {
+                const existing = this.projects.find(p => p.id === this.currentProjectId);
+                name = existing.name;
+            } else {
+                name = prompt('Project name:');
+                if (!name) return;
+            }
+            const body = { name, ...this.config };
+            if (this.currentProjectId) {
+                await fetch(`/api/v1/training/projects/${this.currentProjectId}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+            } else {
+                const res = await fetch('/api/v1/training/projects', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                const created = await res.json();
+                this.currentProjectId = created.id;
+            }
+            await this.loadProjects();
+        },
+
+        async loadProject(id) {
+            const res = await fetch(`/api/v1/training/projects/${id}`);
+            if (!res.ok) return;
+            const project = await res.json();
+            this.currentProjectId = project.id;
+            Object.assign(this.config, project.config);
+        },
+
+        async deleteProject(id) {
+            if (!confirm('Delete this project?')) return;
+            await fetch(`/api/v1/training/projects/${id}`, { method: 'DELETE' });
+            this.currentProjectId = null;
+            await this.loadProjects();
         },
 
         async deleteEmbedding(name) {

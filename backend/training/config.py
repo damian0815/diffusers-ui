@@ -12,12 +12,13 @@ class TIConfig:
     learnable_property: str = "object" # "object" or "style"
     class_prompt: str = ""             # class word appended after TI tokens
     repeats: int = 100                 # dataset repeats
+    augment_max_rotation_degrees: float = 30  # random rotation augmentation
 
     # Model
     model_key: str = ""                # key into models.json
 
     # Training
-    resolution: int = 512
+    resolution: int = 1024
     center_crop: bool = False
     train_batch_size: int = 1
     max_train_steps: int = 500
@@ -25,9 +26,9 @@ class TIConfig:
     lr_scheduler: str = "constant"     # constant, linear, cosine, etc.
     lr_warmup_steps: int = 100
     adam_beta1: float = 0.9
-    adam_beta2: float = 0.999
+    adam_beta2: float = 0.95
     adam_weight_decay: float = 1e-2
-    adam_epsilon: float = 1e-8
+    adam_epsilon: float = 1e-6
     gradient_accumulation_steps: int = 1
     gradient_checkpointing: bool = False
     mixed_precision: str = "bf16"        # no, fp16, bf16

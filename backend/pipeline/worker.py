@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
-import re
 import threading
 import time
 import types
@@ -21,6 +20,7 @@ from backend.pipeline.batcher import get_critical_params
 from backend.pipeline.preview import latents_to_preview_image, PreviewBroadcaster
 from backend.pipeline.compel_encoder import build_prompt_embeds
 from backend.pipeline.mem_stats import MemoryAdvisor
+from backend.prompt_utils import EMBEDDING_RE, expand_prompt
 
 _BATCH_STATE_FILENAME = "batch_state.json"
 
@@ -410,8 +410,6 @@ class PipelineWorker:
             logger.error("Failed to apply TI embedding %s: %s", embedding_path, e)
             raise
 
-    _EMBEDDING_RE = re.compile(r"<([^>]+)>")
-
     async def _resolve_prompt_embeddings(
         self, pipeline, prompts: list[str], neg_prompts: list[str]
     ) -> tuple[list[str], list[str]]:
@@ -421,7 +419,7 @@ class PipelineWorker:
 
         # 1. Collect all unique names from both prompt lists.
         all_text = " ".join(prompts + neg_prompts)
-        names = set(self._EMBEDDING_RE.findall(all_text))
+        names = set(EMBEDDING_RE.findall(all_text))
         if not names:
             return prompts, neg_prompts
 
@@ -439,16 +437,7 @@ class PipelineWorker:
             return prompts, neg_prompts
 
         # 3. Rewrite prompts.
-        def _rewrite(text: str) -> str:
-            def _replace(m: re.Match) -> str:
-                n = m.group(1)
-                k = loaded.get(n)
-                if k is None:
-                    return m.group(0)  # leave unresolved <name> as-is
-                return " ".join(f"{n}.{i}" for i in range(k))
-            return self._EMBEDDING_RE.sub(_replace, text)
-
-        return [_rewrite(p) for p in prompts], [_rewrite(p) for p in neg_prompts]
+        return [expand_prompt(p, loaded) for p in prompts], [expand_prompt(p, loaded) for p in neg_prompts]
 
     async def _run_batch(self, batch: list[QueueItem]) -> bool:
         """Run a single batch: load model, generate, save, record.
@@ -507,6 +496,13 @@ class PipelineWorker:
         prompts, neg_prompts = await self._resolve_prompt_embeddings(
             pipeline, raw_prompts, raw_neg
         )
+        for i, p in enumerate(prompts):
+            if p != raw_prompts[i]:
+                logging.info(f"prompt {i}: '{raw_prompts[i]}' -> '{p}'")
+        for i, p in enumerate(neg_prompts):
+            if p != raw_neg[i]:
+                logging.info(f"prompt {i}: '{raw_neg[i]}' -> '{p}'")
+
 
         for item in batch:
             await self._queue.mark_processing(item)
@@ -711,6 +707,7 @@ class PipelineWorker:
                         call_kwargs['guidance_scale'] = params.cfg
                         if is_sana:
                             call_kwargs['use_resolution_binning'] = False
+                            call_kwargs['complex_human_instruction'] = None
                         else:
                             # guidance_rescale is an SD1/SDXL concept;
                             # SanaPipeline doesn't accept this argument.

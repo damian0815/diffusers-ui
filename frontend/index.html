@@ -989,7 +989,10 @@
           <div class="row">
             <div class="field">
               <label class="field-label">Placeholder Token</label>
-              <input type="text" x-model="config.placeholder_token" placeholder="<sks>">
+              <input type="text" x-model="config.placeholder_token" placeholder="<sks>"
+                     :style="!tokenValid && config.placeholder_token ? 'border-color: var(--danger)' : ''">
+              <span class="field-error" x-show="!tokenValid && config.placeholder_token"
+                    x-transition>Must start and end with angle brackets, e.g. &lt;sks&gt;</span>
             </div>
             <div class="field">
               <label class="field-label">Initializer Token</label>
@@ -1040,13 +1043,27 @@
             <input type="text" x-model="config.validation_prompt" placeholder="Optional prompt for sample images">
           </div>
 
+          <div class="ti-project-bar">
+            <select @change="if ($event.target.value) loadProject(Number($event.target.value))">
+              <option value="">-- Load project --</option>
+              <template x-for="p in projects" :key="p.id">
+                <option :value="p.id" :selected="p.id === currentProjectId"
+                        x-text="p.name"></option>
+              </template>
+            </select>
+            <button class="btn-secondary" @click="saveProject()"
+                    x-text="currentProjectId ? 'Save' : 'Save As...'"></button>
+            <button class="btn-secondary danger" @click="deleteProject(currentProjectId)"
+                    x-show="currentProjectId">Delete</button>
+          </div>
+
           <div class="ti-actions">
             <button class="btn-primary" @click="startTraining()"
-                    :disabled="status === 'running' || !config.gallery_id || !config.model_key">
+                    :disabled="status === 'running' || !config.gallery_id || !config.model_key || !tokenValid">
               <span x-text="status === 'running' ? 'Training...' : 'Start Training'"></span>
             </button>
             <button class="btn-secondary" @click="pauseTraining()" x-show="status === 'running'">Pause</button>
-            <button class="btn-primary" @click="resumeTraining()" x-show="status === 'paused'">Resume</button>
+            <button class="btn-primary" @click="resumeTraining()" x-show="status === 'paused">Resume</button>
             <button class="btn-secondary danger" @click="stopTraining()" 
                     x-show="status === 'running' || status === 'paused'">Stop</button>
           </div>

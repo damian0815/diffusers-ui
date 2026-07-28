@@ -59,6 +59,7 @@ async def init_db() -> None:
     # Import all models so their metadata is registered before create_all
     import backend.gallery.models  # noqa: F401
     import backend.queue.models    # noqa: F401
+    import backend.training.models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_apply_inline_migrations)
