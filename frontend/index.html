@@ -1033,6 +1033,17 @@
             </div>
           </div>
 
+          <div class="row">
+            <div class="field">
+              <label class="field-label">Batch Size</label>
+              <input type="number" x-model.number="config.train_batch_size" min="1" max="64">
+            </div>
+            <div class="field">
+              <label class="field-label">Seed</label>
+              <input type="number" x-model.number="config.seed">
+            </div>
+          </div>
+
           <div class="field-group">
             <label class="field-label">Output Name</label>
             <input type="text" x-model="config.output_name">

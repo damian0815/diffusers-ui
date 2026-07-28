@@ -4,6 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class TIConfig:
     """All hyperparameters for a TI training run."""
+    config_version: int = 1
     # Data
     gallery_id: str                    # source gallery board_id
     placeholder_token: str = "<sks>"   # new token to learn

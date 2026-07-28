@@ -8,6 +8,7 @@ from backend.training.models import TIProject
 router = APIRouter(prefix="/api/v1/training", tags=["training"])
 
 class TIStartRequest(BaseModel):
+    config_version: int = 1
     gallery_id: str
     placeholder_token: str = "<sks>"
     initializer_token: str = "dog"
@@ -107,6 +108,7 @@ async def list_projects():
 
 class ProjectCreateRequest(BaseModel):
     name: str
+    config_version: int = 1
     gallery_id: str
     placeholder_token: str = "<sks>"
     initializer_token: str = "dog"

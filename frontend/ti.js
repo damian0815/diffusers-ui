@@ -20,7 +20,8 @@ function ti() {
             validation_steps: 100,
             save_steps: 100,
             output_name: 'learned_embeds',
-            repeats: 100
+            repeats: 100,
+            config_version: 1
         },
         galleries: [],
         models: [],
