@@ -6,7 +6,7 @@ class TIConfig:
     """All hyperparameters for a TI training run."""
     config_version: int = 1
     # Data
-    gallery_id: str                    # source gallery board_id
+    gallery_id: str = "Default"        # source gallery board_id
     placeholder_token: str = "<sks>"   # new token to learn
     initializer_token: str = "dog"     # seed word for initial embedding
     num_vectors: int = 1               # multi-vector TI
