@@ -164,6 +164,7 @@ class TITrainer:
             # TITrainer handles loading the pipeline. Since PipelineLoader holds one model,
             # we must ensure inference is not running. The frontend enforces mutual exclusion.
             pipeline = await asyncio.to_thread(self._loader.load, entry)
+            self._pipeline = pipeline
             
             text_encoder = pipeline.text_encoder
             tokenizer = pipeline.tokenizer
@@ -181,6 +182,7 @@ class TITrainer:
             else:
                 denoising_model = pipeline.unet
                 noise_scheduler = pipeline.scheduler
+            self._noise_scheduler = noise_scheduler
 
             # Add tokens
             placeholder_token_ids = _add_tokens(tokenizer, self._config)
@@ -250,14 +252,6 @@ class TITrainer:
             if is_sana and weight_dtype != torch.bfloat16:
                 weight_dtype = torch.bfloat16
 
-            # Store model components for on-demand sample generation
-            self._text_encoder = text_encoder
-            self._tokenizer = tokenizer
-            self._vae = vae
-            self._denoising_model = denoising_model
-            self._noise_scheduler = noise_scheduler
-            self._weight_dtype = weight_dtype
-
             t0 = time.time()
 
             steps_per_epoch = max(1, len(train_dataset) // self._config.train_batch_size)
@@ -271,7 +265,6 @@ class TITrainer:
             # Generate initial samples at step 0 before training starts
             if self._config.validation_prompt:
                 val_loss, val_images = await self._run_validation(
-                    text_encoder, vae, denoising_model, noise_scheduler, tokenizer,
                     val_dataloader, self._config, weight_dtype
                 )
                 self._state.val_loss = val_loss
@@ -295,10 +288,7 @@ class TITrainer:
                     # Check for on-demand sample request
                     if self._sample_request_event.is_set():
                         self._sample_request_event.clear()
-                        await self._generate_samples_on_demand(
-                            text_encoder, vae, denoising_model, tokenizer,
-                            self._config, weight_dtype
-                        )
+                        await self._generate_samples_on_demand(self._config)
 
                     text_encoder.train()
 
@@ -376,7 +366,6 @@ class TITrainer:
 
                     if global_step % self._config.validation_steps == 0:
                         val_loss, val_images = await self._run_validation(
-                            text_encoder, vae, denoising_model, noise_scheduler, tokenizer,
                             val_dataloader, self._config, weight_dtype
                         )
                         self._state.val_loss = val_loss
@@ -413,7 +402,16 @@ class TITrainer:
             self._loader.unload()
             self._task = None
 
-    async def _run_validation(self, text_encoder, vae, denoising_model, scheduler, tokenizer, val_dataloader, config, weight_dtype):
+    async def _run_validation(self, val_dataloader, config, weight_dtype):
+        text_encoder = self._pipeline.text_encoder
+        vae = self._pipeline.vae
+        tokenizer = self._pipeline.tokenizer
+        scheduler = self._noise_scheduler
+        if self._is_sana:
+            denoising_model = self._pipeline.transformer
+        else:
+            denoising_model = self._pipeline.unet
+
         text_encoder.eval()
         total_loss = 0.0
         count = 0
@@ -477,40 +475,23 @@ class TITrainer:
             # Generate samples if prompt provided
             sample_images = []
             if config.validation_prompt:
-                # Temporarily merge offsets for generation, then restore original weights
-                embeddings_layer = text_encoder.get_input_embeddings()
-                saved_weights = embeddings_layer.weight.data.clone()
-                _apply_weight_offsets_in_place(embeddings_layer, self._training_token_ids, self._offsets)
-                if self._is_sana:
-                    from diffusers import SanaPipeline
-                    pipe = SanaPipeline.from_pretrained(
-                        self._registry.get(config.model_key).source,
-                        text_encoder=text_encoder, tokenizer=tokenizer,
-                        transformer=denoising_model, vae=vae,
-                    )
-                else:
-                    from diffusers import DiffusionPipeline
-                    pipe = DiffusionPipeline.from_pretrained(
-                        self._registry.get(config.model_key).source,
-                        text_encoder=text_encoder, tokenizer=tokenizer, unet=denoising_model, vae=vae
-                    )
+                pipe = self._pipeline
                 gen = torch.Generator().manual_seed(config.validation_seed)
                 pipe_kwargs = dict(num_inference_steps=25, generator=gen)
                 if self._is_sana:
                     pipe_kwargs["guidance_scale"] = 4.5
-                for _ in range(config.num_validation_images):
-                    img = pipe(config.validation_prompt, **pipe_kwargs).images[0]
-                    name = f"{uuid.uuid4()}.png"
-                    img.save(settings.images_dir / name)
-                    sample_images.append(name)
-                del pipe
-                embeddings_layer.weight.data.copy_(saved_weights)
+                with torch.no_grad():
+                    for _ in range(config.num_validation_images):
+                        img = pipe(config.validation_prompt, **pipe_kwargs).images[0]
+                        name = f"{uuid.uuid4()}.png"
+                        img.save(settings.images_dir / name)
+                        sample_images.append(name)
 
         text_encoder.train()
 
         return total_loss / max(count, 1), sample_images
 
-    async def _generate_samples_on_demand(self, text_encoder, vae, denoising_model, tokenizer, config, weight_dtype):
+    async def _generate_samples_on_demand(self, config):
         """Generate sample images on-demand. Cancellable via _sample_cancel_event."""
         if not config.validation_prompt:
             return
@@ -520,26 +501,8 @@ class TITrainer:
         await self._broadcaster.broadcast_event("ti_sample_status", {"generating": True})
 
         try:
-            with isolate_rng():
-                embeddings_layer = text_encoder.get_input_embeddings()
-                saved_weights = embeddings_layer.weight.data.clone()
-                _apply_weight_offsets_in_place(embeddings_layer, self._training_token_ids, self._offsets)
-
-                if self._is_sana:
-                    from diffusers import SanaPipeline
-                    pipe = SanaPipeline.from_pretrained(
-                        self._registry.get(config.model_key).source,
-                        text_encoder=text_encoder, tokenizer=tokenizer,
-                        transformer=denoising_model, vae=vae,
-                    )
-                else:
-                    from diffusers import DiffusionPipeline
-                    pipe = DiffusionPipeline.from_pretrained(
-                        self._registry.get(config.model_key).source,
-                        text_encoder=text_encoder, tokenizer=tokenizer,
-                        unet=denoising_model, vae=vae,
-                    )
-
+            with isolate_rng(), torch.no_grad():
+                pipe = self._pipeline
                 gen = torch.Generator().manual_seed(config.validation_seed)
                 pipe_kwargs = dict(num_inference_steps=25, generator=gen)
                 if self._is_sana:
@@ -553,8 +516,6 @@ class TITrainer:
                     name = f"{uuid.uuid4()}.png"
                     img.save(settings.images_dir / name)
                     sample_images.append(name)
-                del pipe
-                embeddings_layer.weight.data.copy_(saved_weights)
 
             if sample_images:
                 self._state.samples = sample_images
