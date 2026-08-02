@@ -475,7 +475,8 @@ List all registered models.
       "source_type": "hf_repo_id",
       "has_api_key": false,
       "quantization": null,
-      "files_missing": false
+      "files_missing": false,
+      "merge": null
     }
   ]
 }
@@ -529,6 +530,53 @@ Send `"quantization": ""` to clear quantization.
 Remove a model from the registry.
 
 **Response** `{ "deleted": "model-key" }`
+
+### `POST /merge`
+
+Create a **model merge** — a weighted blend of the `transformer` weights of 2+
+registered SANA models. Only a *specification* is stored; no merged weight file
+is written. The blend is materialised in CPU RAM at inference time when the
+merge is loaded.
+
+**Body**
+```json
+{
+  "name": "My SANA Blend",
+  "components": [
+    { "key": "component-key-1", "weight": 1.0 },
+    { "key": "component-key-2", "weight": 2.0 }
+  ]
+}
+```
+
+`weight` defaults to `1.0`. Alphas are normalized over the sum of all weights.
+
+**Validation (definition time)**
+- Structural errors (fewer than 2 components, unknown key, non-SANA model,
+  nested merge, non-positive weight) → **400** with a plain-string `detail`.
+- Architecture mismatch (a component's transformer key set differs from the
+  base/first model) → **400** with a structured `detail`:
+  ```json
+  {
+    "detail": {
+      "error": "Merge architecture mismatch",
+      "components": { "offending-key": "human-readable reason" }
+    }
+  }
+  ```
+
+**Response** A model entry dict with a `merge` field:
+```json
+"merge": [
+  { "key": "component-key-1", "weight": 1.0, "name": "Sana A" }
+]
+```
+`name` is `"(deleted)"` if the component model has been removed from the registry.
+
+Merge models:
+- have `quantization` forced to `null` (PATCH to set one → **400**)
+- cannot be used as components of another merge
+- are listed in `GET /` with a populated `merge` field
 
 ### `GET /loaded`
 

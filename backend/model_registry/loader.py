@@ -3,6 +3,12 @@ from __future__ import annotations
 import gc
 import logging
 import types
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"MatMul8bitLt: inputs will be cast from .* to float16 during quantization",
+)
 
 import torch
 from diffusers import SanaPAGPipeline
@@ -21,9 +27,10 @@ class PipelineLoader:
     Only one model is loaded at a time (memory-efficient for local use).
     """
 
-    def __init__(self):
+    def __init__(self, registry=None):
         self._pipeline = None
         self._loaded_key: str | None = None
+        self._registry = registry   # ModelRegistry, used to resolve merge components
 
     def load(self, entry: ModelEntry):
         """Load the pipeline for the given model entry. No-op if already loaded."""
@@ -31,7 +38,9 @@ class PipelineLoader:
             return self._pipeline
         self._unload()
         try:
-            if entry.base == "sana":
+            if entry.merge:
+                self._pipeline = _load_merge_pipeline(entry, self._registry)
+            elif entry.base == "sana":
                 self._pipeline = _load_sana_pipeline(entry)
             else:
                 from diffusers import DiffusionPipeline
@@ -279,5 +288,155 @@ def _enable_fast_attention(pipeline) -> None:
             logging.info("PyTorch SDPA (Flash Attention) enabled.")
     except Exception as exc:
         logging.info("Could not configure PyTorch SDPA: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Model merge helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_transformer_sd_paths(entry: ModelEntry) -> list:
+    """Return the path(s) of a component's transformer weights.
+
+    - local_path: read straight from the model dir.
+    - hf_repo_id: snapshot_download restricted to the transformer subfolder
+      (downloads only if not cached; token supports private repos).
+    Handles both a single safetensors file and the sharded
+    ``diffusion_pytorch_model-00001-of-00002.safetensors`` layout.
+    """
+    from pathlib import Path
+    if entry.source_type == "local_path":
+        root = Path(entry.source)
+    else:
+        from huggingface_hub import snapshot_download
+        root = Path(snapshot_download(
+            repo_id=entry.source,
+            allow_patterns=["transformer/*"],
+            token=entry.hf_api_key,
+        ))
+    transformer_dir = root / "transformer"
+    single = transformer_dir / "diffusion_pytorch_model.safetensors"
+    if single.exists():
+        return [single]
+    shards = sorted(transformer_dir.glob("diffusion_pytorch_model-*.safetensors"))
+    if shards:
+        return shards
+    raise PipelineLoadError(
+        f"No transformer weights found under {transformer_dir!s} "
+        f"(expected diffusion_pytorch_model.safetensors or shards)."
+    )
+
+
+def _close_safetensors_handles(handles) -> None:
+    """Close safe_open handles if supported; newer safetensors versions
+    free the underlying mmap when the handle is garbage collected."""
+    for h in handles:
+        close = getattr(h, "close", None)
+        if close is not None:
+            close()
+
+
+def validate_merge_components(components: list[ModelEntry]) -> None:
+    """Architecture pre-check: all components must expose the SAME key set.
+
+    Compares every component's transformer key set against the first (base)
+    component. Raises ModelMergeError with `incompatible` = {component_key: reason}
+    for each mismatching component. Must run in a thread (may download HF
+    weights on first use).
+    """
+    from backend.model_registry.registry import ModelMergeError
+    from safetensors import safe_open
+
+    def _key_set(entry: ModelEntry) -> set:
+        handles = [
+            safe_open(str(p), framework="pt", device="cpu")
+            for p in _resolve_transformer_sd_paths(entry)
+        ]
+        try:
+            return set().union(*(set(h.keys()) for h in handles))
+        finally:
+            _close_safetensors_handles(handles)
+
+    base = components[0]
+    base_keys = _key_set(base)
+    incompatible: dict[str, str] = {}
+    for comp in components[1:]:
+        keys = _key_set(comp)
+        if keys != base_keys:
+            incompatible[comp.key] = (
+                f"'{comp.name}' has a different architecture to the base model "
+                f"'{base.name}' ({len(keys)} transformer weight keys vs "
+                f"{len(base_keys)}). Mixing architectures (e.g. 600M + 1600M) "
+                f"is not supported."
+            )
+    if incompatible:
+        raise ModelMergeError("Merge architecture mismatch", incompatible=incompatible)
+
+
+def _merge_transformer_state_dicts(
+    components: list[ModelEntry], weights: list[float]
+) -> dict:
+    """Blend the transformer state dicts of ``components`` in CPU RAM.
+
+    For each key: weighted sum over all components, accumulating in the dtype
+    of the first tensor encountered (native dtype). Alphas are normalized over
+    the sum of all weights. Closes all safetensors handles (mmaps) on exit.
+    """
+    from safetensors import safe_open
+
+    def _open_component(entry: ModelEntry):
+        handles = [
+            safe_open(str(p), framework="pt", device="cpu")
+            for p in _resolve_transformer_sd_paths(entry)
+        ]
+        key_sets = [set(h.keys()) for h in handles]     # cache per-handle
+        return handles, set().union(*key_sets), key_sets
+
+    component_data = [_open_component(e) for e in components]
+    try:
+        total = sum(weights)
+        alphas = [w / total for w in weights]
+        ref_dtype = None
+        merged: dict[str, torch.Tensor] = {}
+
+        for key in component_data[0][1]:
+            acc = None
+            for (handles, _, key_sets), alpha in zip(component_data, alphas):
+                idx = next(i for i, ks in enumerate(key_sets) if key in ks)
+                t = handles[idx].get_tensor(key)
+                if ref_dtype is None:
+                    ref_dtype = t.dtype
+                t = t.to(ref_dtype)
+                acc = t * alpha if acc is None else acc + t * alpha
+            merged[key] = acc
+
+        return merged
+    finally:
+        for handles, _, _ in component_data:
+            _close_safetensors_handles(handles)
+
+
+def _load_merge_pipeline(entry: ModelEntry, registry) -> object:
+    """Load a merge spec: blend transformer SDs, load base pipeline, swap weights."""
+    if registry is None:
+        raise PipelineLoadError("PipelineLoader was created without a registry; cannot resolve merge.")
+    components = []
+    for spec in entry.merge:
+        comp = registry.get(spec.key)
+        if comp is None:
+            raise PipelineLoadError(
+                f"Merge {entry.name!r} references model {spec.key!r} which is no longer in the registry."
+            )
+        components.append(comp)
+
+    weights = [spec.weight for spec in entry.merge]
+    merged_sd = _merge_transformer_state_dicts(components, weights)
+
+    pipeline = _load_sana_pipeline(entry)          # base pipeline == first component
+    try:
+        pipeline.transformer.load_state_dict(merged_sd)   # strict=True (default)
+    finally:
+        del merged_sd                                 # free the CPU RAM merge buffer
+
+    return pipeline
 
 

@@ -3,11 +3,25 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from backend.domain import ModelEntry
+from backend.domain import ModelEntry, MergeComponent
 
 
 class ModelNotFoundError(Exception):
     """Raised when a model key does not exist in the registry."""
+
+
+class ModelMergeError(ValueError):
+    """Raised when a merge specification is invalid.
+
+    For structural errors (missing key, non-sana, nested merge, bad weight,
+    too few components) `incompatible` is None and str(exc) is the message.
+    For architecture mismatches, `incompatible` maps component key ->
+    human-readable reason, so the API can surface it per model row.
+    """
+
+    def __init__(self, message: str, incompatible: dict[str, str] | None = None):
+        super().__init__(message)
+        self.incompatible = incompatible
 
 
 class ModelRegistry:
@@ -78,6 +92,47 @@ class ModelRegistry:
             raise ModelNotFoundError(f"No model with key {key!r}")
         del self._entries[key]
         self._save()
+
+    def resolve_merge_components(self, components: list[tuple[str, float]]) -> list[ModelEntry]:
+        """Validate (key, weight) pairs structurally and return the resolved entries.
+
+        Raises ModelMergeError on the first invalid component. No file access.
+        """
+        if len(components) < 2:
+            raise ModelMergeError("A merge needs at least 2 models.")
+        resolved: list[ModelEntry] = []
+        for key, weight in components:
+            comp = self._entries.get(key)
+            if comp is None:
+                raise ModelMergeError(f"No model with key {key!r}.")
+            if comp.merge is not None:
+                raise ModelMergeError(f"{comp.name!r} is itself a merge — nested merges are not supported.")
+            if comp.base != "sana":
+                raise ModelMergeError(f"{comp.name!r} is a {comp.base} model; only SANA models can be merged.")
+            if weight <= 0:
+                raise ModelMergeError(f"Weights must be positive (got {weight!r}).")
+            resolved.append(comp)
+        return resolved
+
+    def add_merge(self, name: str, components: list[tuple[str, float]]) -> ModelEntry:
+        """Create and register a merge model from (key, weight) pairs.
+
+        The merge's base/source/source_type/hf_api_key are taken from the FIRST
+        component (the base model the pipeline is loaded from).
+        """
+        resolved = self.resolve_merge_components(components)
+        first = resolved[0]
+        entry = ModelEntry(
+            key=str(uuid.uuid4()),
+            name=name,
+            base="sana",
+            source=first.source,
+            source_type=first.source_type,
+            hf_api_key=first.hf_api_key,
+            quantization=None,
+            merge=[MergeComponent(key=comp.key, weight=weight) for comp, weight in zip(resolved, (w for _, w in components))],
+        )
+        return self.add(entry)
 
     # ------------------------------------------------------------------
     # Private helpers

@@ -264,6 +264,7 @@
                 <option value="euler">Euler</option>
                 <option value="euler_a">Euler A</option>
                 <option value="euler_flowmatch_dynshift">Euler FM DynShift</option>
+                <option value="euler_flowmatch_shift1">Euler FM Shift1</option>
                 <option value="ddim">DDIM</option>
                 <option value="lms">LMS</option>
                 <option value="dpmpp_3m">DPM++ 3M</option>
@@ -1074,7 +1075,7 @@
               <span x-text="status === 'running' ? 'Training...' : 'Start Training'"></span>
             </button>
             <button class="btn-secondary" @click="pauseTraining()" x-show="status === 'running'">Pause</button>
-            <button class="btn-primary" @click="resumeTraining()" x-show="status === 'paused">Resume</button>
+            <button class="btn-primary" @click="resumeTraining()" x-show="status === 'paused'">Resume</button>
             <button class="btn-secondary danger" @click="stopTraining()" 
                     x-show="status === 'running' || status === 'paused'">Stop</button>
           </div>
@@ -1185,6 +1186,12 @@
         <h1 class="fs-title">Models</h1>
         <span class="fs-subtitle"
               x-text="models.length ? `${models.length} registered` : 'No models registered'"></span>
+      </div>
+      <div class="fs-header-actions">
+        <button class="btn-secondary" @click="openMergeModal()"
+                :disabled="models.filter(m => m.base === 'sana' && !m.merge).length < 2">
+          ⛓ Add Merge
+        </button>
       </div>
     </div>
 
@@ -1325,9 +1332,12 @@
             </div>
             <div class="model-row-meta">
               <span class="model-base-badge" x-text="m.base"></span>
-              <span class="model-row-source" x-text="m.source"></span>
+              <span class="model-base-badge merge-badge" x-show="m.merge">merge</span>
+              <span class="model-row-source" x-show="!m.merge" x-text="m.source"></span>
+              <span class="model-row-source" x-show="m.merge"
+                    x-text="(m.merge || []).map(c => `${c.name} (${c.weight})`).join('  +  ')"></span>
             </div>
-            <div class="model-row-quant">
+            <div class="model-row-quant" x-show="!m.merge">
               <label class="field-label" style="margin:0;font-size:11px">Quantization</label>
               <select class="quant-select"
                       :value="m.quantization || ''"
@@ -1342,11 +1352,77 @@
                 (applied on next load)
               </span>
             </div>
+            <div class="model-row-quant" x-show="m.merge">
+              <span class="hint" style="margin:0;font-size:11px">
+                Merged model — quantization not applicable
+              </span>
+            </div>
           </div>
         </template>
 
       </div>
     </div><!-- /fs-body -->
+
+    <!-- ── Merge modal ── -->
+    <div class="modal-backdrop"
+         style="display: none;"
+         x-show="mergeModal.open"
+         x-transition.opacity
+         @click.self="mergeModal.open = false">
+      <div class="modal-box"
+           x-show="mergeModal.open"
+           x-transition
+           style="max-width: 560px;">
+
+        <div class="modal-header">
+          <span class="modal-title">Create Merge (SANA)</span>
+          <button class="info-close-btn" @click="mergeModal.open = false">&times;</button>
+        </div>
+
+        <div class="modal-body">
+          <label class="field-label">Merge name</label>
+          <input type="text" x-model="mergeModal.name"
+                 placeholder="e.g. My SANA Blend"
+                 @keydown.enter="addMerge()">
+
+          <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;
+                      max-height:320px; overflow-y:auto;">
+            <template x-for="c in mergeModal.components" :key="c.key">
+              <div>
+                <div class="merge-component-row">
+                  <label class="checkbox-label" style="flex:1">
+                    <input type="checkbox" x-model="c.selected" @change="clearMergeWarnings()">
+                    <span x-text="c.name"></span>
+                  </label>
+                  <input type="number" min="0.05" step="0.05" style="width:80px"
+                         :disabled="!c.selected" x-model="c.weight" title="Merge weight">
+                </div>
+                <!-- Inline red warning for incompatible architectures -->
+                <p class="merge-row-warning" x-show="c.warning" x-text="c.warning"></p>
+              </div>
+            </template>
+          </div>
+
+          <p class="hint" x-show="mergeModal.components.length === 0" style="margin-top:8px">
+            No SANA models registered. Install at least two SANA models first.
+          </p>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-secondary"
+                  :disabled="mergeModal.pending"
+                  @click="mergeModal.open = false">Cancel</button>
+          <button class="btn-primary"
+                  :disabled="mergeModal.pending
+                             || mergeModal.components.filter(c => c.selected).length < 2
+                             || !mergeModal.name.trim()"
+                  @click="addMerge()">
+            <span x-text="mergeModal.pending ? 'Checking…' : 'Create Merge'"></span>
+          </button>
+        </div>
+
+      </div>
+    </div>
   </div><!-- /#models-view -->
 
 </body>

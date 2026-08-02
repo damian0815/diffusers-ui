@@ -1471,6 +1471,31 @@ select option { background: var(--surface); }
   margin-top: 2px;
 }
 
+/* Merge model row badge */
+.merge-badge {
+  background: var(--accent-bg, rgba(99,102,241,.15));
+  color: var(--accent);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: .05em;
+}
+
+/* Merge modal component rows */
+.merge-component-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.merge-row-warning {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--danger);       /* #f87171 */
+  line-height: 1.35;
+}
+
 /* Quant select — used in both installed-model rows and candidate rows */
 .quant-select {
   font-size: 11px;

@@ -90,6 +90,7 @@ SAMPLER_MAP: dict[str, tuple[str, dict]] = {
     "euler": ("EulerDiscreteScheduler", {}),
     "euler_a": ("EulerAncestralDiscreteScheduler", {}),
     "euler_flowmatch_dynshift": ("SDPipelineInferenceFlowMatchEulerDiscreteScheduler", dict(shift=1, use_dynamic_shifting=True, time_shift_type='linear')),
+    "euler_flowmatch_shift1": ("SDPipelineInferenceFlowMatchEulerDiscreteScheduler", dict(shift=1, use_dynamic_shifting=False, time_shift_type='linear')),
     "ddim": ("DDIMScheduler", {}),
     "lms": ("LMSDiscreteScheduler", {}),
     "kdpm_2_a": ("KDPM2AncestralDiscreteScheduler", {}),

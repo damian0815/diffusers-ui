@@ -30,6 +30,19 @@ def make_params(**overrides):
     return ImageGenerationParams(**{**defaults, **overrides})
 
 
+def make_fake_sana_dir(root: Path, name: str, keys: list[str], dtype=None) -> Path:
+    """Create root/<name>/transformer/diffusion_pytorch_model.safetensors
+    with one small random tensor per key. Returns the model dir."""
+    import torch
+    from safetensors.torch import save_file
+    model_dir = root / name
+    tdir = model_dir / "transformer"
+    tdir.mkdir(parents=True, exist_ok=True)
+    tensors = {k: torch.randn(2, 4, dtype=dtype) for k in keys}
+    save_file(tensors, str(tdir / "diffusion_pytorch_model.safetensors"))
+    return model_dir
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

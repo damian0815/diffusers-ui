@@ -62,6 +62,8 @@ function app() {
     modelEditingKey: null,
     modelEditName: '',
     autoSelectLatest: true,
+    mergeModal: { open: false, name: '', components: [], pending: false },
+    // components: [{ key, name, selected: false, weight: 1.0, warning: null }, ...]
 
     // ---- Img2img state ----
     sourceImage: null,          // null | {name, url, width, height}
@@ -114,6 +116,16 @@ function app() {
     _showCropModal: false,
 
     async init() {
+      // Register these listeners before any awaits so we never miss the events
+      // the gallery fires during its own init (its /api/v1/boards/ fetch resolves
+      // faster than the model/loras/embeddings calls below).
+      window.addEventListener('board-changed', (e) => {
+        this._currentBoardId = e.detail.boardId;
+      });
+      window.addEventListener('galleries-updated', (e) => {
+        this._galleries = e.detail.galleries || [];
+      });
+
       Layout.init();
       await this.loadModels();
       await this.fetchLoras();
@@ -203,16 +215,6 @@ function app() {
         } else if (event === 'worker_resumed') {
           this.isPaused = false;
         }
-      });
-
-      // Keep _currentBoardId in sync with whatever gallery has selected.
-      window.addEventListener('board-changed', (e) => {
-        this._currentBoardId = e.detail.boardId;
-      });
-
-      // Keep a local copy of the gallery list for the target-gallery picker.
-      window.addEventListener('galleries-updated', (e) => {
-        this._galleries = e.detail.galleries || [];
       });
 
       // React to gallery reporting its first visible image.
@@ -1269,6 +1271,59 @@ function app() {
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
       } catch (e) { this._setError(`Could not update quantization: ${e.message}`); }
+    },
+
+    openMergeModal() {
+      const sanaModels = this.models.filter(m => m.base === 'sana' && !m.merge);
+      this.mergeModal = {
+        open: true,
+        name: '',
+        pending: false,
+        components: sanaModels.map(m => ({ key: m.key, name: m.name, selected: false, weight: 1.0, warning: null })),
+      };
+    },
+
+    clearMergeWarnings() {
+      for (const c of this.mergeModal.components) c.warning = null;
+    },
+
+    async addMerge() {
+      const sel = this.mergeModal.components.filter(c => c.selected);
+      if (!this.mergeModal.name.trim() || sel.length < 2) {
+        this._setError('Merge needs a name and at least 2 SANA models.');
+        return;
+      }
+      // Clear stale warnings before re-checking
+      this.clearMergeWarnings();
+      this.mergeModal.pending = true;           // disables OK and Cancel
+      try {
+        const resp = await fetch('/api/v2/models/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: this.mergeModal.name.trim(),
+            components: sel.map(c => ({ key: c.key, weight: Number(c.weight) || 1.0 })),
+          }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => null);
+          const detail = err && err.detail;
+          // Architecture mismatch → show red warning on offending rows, keep modal open
+          if (detail && typeof detail === 'object' && detail.components) {
+            for (const c of this.mergeModal.components) {
+              c.warning = detail.components[c.key] || null;
+            }
+            return;   // finally still resets pending; user can correct or cancel
+          }
+          throw new Error(typeof detail === 'string' ? detail : 'Could not create merge');
+        }
+        this.mergeModal.open = false;
+        await this.loadModels();
+      } catch (e) {
+        this._setError(`Merge failed: ${e.message}`);
+      } finally {
+        this.mergeModal.pending = false;
+      }
     },
 
     // ----------------------------------------------------------------

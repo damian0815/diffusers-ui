@@ -37,7 +37,7 @@ class TIState:
 Sampler = Literal[
     'dpmpp_sde_k', 'dpmpp_sde', 'dpmpp_2m_sde_k', 'dpmpp_2m_sde',
     'dpmpp', 'dpmpp_2m', 'dpmpp_3m', 'euler', 'euler_a', 'ddim', 'lms', 'kdpm_2_a',
-    'euler_flowmatch_dynshift'
+    'euler_flowmatch_dynshift', 'euler_flowmatch_shift1'
 ]
 
 
@@ -128,6 +128,13 @@ class QueueItem:
 
 
 @dataclass
+class MergeComponent:
+    """One component of a model merge (weighted alpha)."""
+    key: str          # registry key of a component model
+    weight: float     # alpha (default 1.0)
+
+
+@dataclass
 class ModelEntry:
     key: str                             # stable UUID, generated on first registration
     name: str                            # user-facing label
@@ -136,6 +143,14 @@ class ModelEntry:
     source_type: Literal['hf_repo_id', 'local_path']
     hf_api_key: str | None = None        # stored only if user provided one
     quantization: str | None = None      # 'int8', 'int4', or None (SANA only for now)
+    merge: list[MergeComponent] | None = None   # present only on merge entries
+
+    def __post_init__(self) -> None:
+        if self.merge is not None:
+            self.merge = [
+                c if isinstance(c, MergeComponent) else MergeComponent(**c)
+                for c in self.merge
+            ]
 
 
 # ---------------------------------------------------------------------------
