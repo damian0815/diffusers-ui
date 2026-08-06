@@ -150,9 +150,9 @@
               <textarea x-model="prompt" rows="4" placeholder="Describe your image…"
                         @input="onPromptInput($event)"
                         @keydown.escape="tiAutocomplete.visible = false"
-                        @keydown.up.prevent="if(tiAutocomplete.visible) { tiAutocomplete.index = Math.max(0, tiAutocomplete.index - 1) }"
-                        @keydown.down.prevent="if(tiAutocomplete.visible) { tiAutocomplete.index = Math.min(tiAutocomplete.matches.length - 1, tiAutocomplete.index + 1) }"
-                        @keydown.enter.prevent="if(tiAutocomplete.visible && tiAutocomplete.matches.length) insertTiToken(tiAutocomplete.matches[tiAutocomplete.index].name)"
+                        @keydown.up="if(tiAutocomplete.visible) { $event.preventDefault(); tiAutocomplete.index = Math.max(0, tiAutocomplete.index - 1) }"
+                        @keydown.down="if(tiAutocomplete.visible) { $event.preventDefault(); tiAutocomplete.index = Math.min(tiAutocomplete.matches.length - 1, tiAutocomplete.index + 1) }"
+                        @keydown.enter="if(tiAutocomplete.visible) { $event.preventDefault(); if (tiAutocomplete.matches.length) insertTiToken(tiAutocomplete.matches[tiAutocomplete.index].name) }"
                         @blur="setTimeout(() => tiAutocomplete.visible = false, 150)"
                         x-ref="promptTextarea"></textarea>
               <div class="ti-autocomplete"
@@ -581,8 +581,8 @@
                @click.outside="showOptions = false" x-transition>
             <div class="option-row">
               <span class="option-label">Sort</span>
-              <button :class="{active: sortBy === 'gen_seq'}"
-                      @click="sortBy='gen_seq'; resetAndLoad(); showOptions=false">Submission</button>
+              <button :class="{active: sortBy === 'request_serial_number'}"
+                      @click="sortBy='request_serial_number'; resetAndLoad(); showOptions=false">Submission</button>
               <button :class="{active: sortBy === 'created_at'}"
                       @click="sortBy='created_at'; resetAndLoad(); showOptions=false">Gen</button>
             </div>

@@ -6,7 +6,7 @@ function gallery() {
     selectedBoardId: null,
     images: [],
     search: '',
-    sortBy: 'gen_seq',
+    sortBy: 'request_serial_number',
     sortDir: 'desc',
     starredFirst: false,
     showOptions: false,
@@ -304,7 +304,7 @@ function gallery() {
 
     _insertImageInOrder(img) {
       const dir = this.sortDir === 'asc' ? 1 : -1;
-      const key = this.sortBy === 'created_at' ? 'created_at' : 'gen_seq';
+      const key = this.sortBy === 'created_at' ? 'created_at' : 'request_serial_number';
       const getVal = (item) => {
         const v = item[key];
         if (v === null || v === undefined) return dir === 1 ? Infinity : -Infinity;

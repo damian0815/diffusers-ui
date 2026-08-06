@@ -55,9 +55,10 @@ class ImageRecord(Base):
     model_key = Column(String, default="")
     model_name = Column(String, default="")
 
-    # Monotonically increasing enqueue order (= QueueItem.item_id).
+    # Submission serial number (= QueueItem.item_id, assigned at enqueue time).
+    # Constant all the way from enqueue through generation to the frontend.
     # NULL for images created before this column was added.
-    gen_seq = Column(Integer, nullable=True, index=True)
+    request_serial_number = Column(Integer, nullable=True, index=True)
 
     # Img2img / source image metadata (nullable for backward compat)
     source_image = Column(String, nullable=True)

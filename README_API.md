@@ -75,14 +75,17 @@ Prefix: `/api/v1/images`
 
 ### `GET /`
 
-Paginated list of images in a gallery. Ordered by `gen_seq DESC NULLS LAST, created_at DESC`.
+Paginated list of images in a gallery. Ordered by `request_serial_number DESC NULLS LAST, created_at DESC`.
 
 **Query**
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `board_id` | str | required | gallery UUID |
 | `search` | str | — | full-text search on prompt/negative_prompt |
-| `starred_only` | bool | `false` | only starred images |
+| `sort_by` | str | `request_serial_number` | `request_serial_number` (submission order) or `created_at` (generation order) |
+| `sort_dir` | str | `desc` | `asc` or `desc` |
+| `starred_first` | bool | `false` | promote starred images to the top of the sort |
+| `starred_only` | bool | `false` | only starred images (legacy filter) |
 | `offset` | int | `0` | pagination offset |
 | `limit` | int | `50` | page size |
 
@@ -154,7 +157,7 @@ Return generation metadata for an image.
   "model_key": "model-key",
   "model_name": "Model Name",
   "starred": false,
-  "gen_seq": 42,
+  "request_serial_number": 42,
   "created_at": "2025-01-15 10:30:00.123456",
   "tags": ["tag1", "tag2"],
   "source_image": null,
@@ -299,7 +302,7 @@ When `seed == -1`, each item gets an independent random seed.
       "crop_width": 0,
       "crop_height": 0,
       "starred": false,
-      "gen_seq": null,
+      "request_serial_number": null,
       "created_at": null,
       "tags": []
     }

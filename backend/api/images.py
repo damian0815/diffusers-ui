@@ -142,7 +142,7 @@ async def list_images(
     starred_only: bool = False,
     offset: int = 0,
     limit: int = 50,
-    sort_by: str = "gen_seq",
+    sort_by: str = "request_serial_number",
     sort_dir: str = "desc",
     starred_first: bool = False,
     session=Depends(get_session),
@@ -206,7 +206,8 @@ def _image_record_to_dict(record) -> dict:
         "model_key": record.model_key,
         "model_name": record.model_name,
         "starred": record.starred,
-        "gen_seq": record.gen_seq,
+        "request_serial_number": record.request_serial_number,
+        "gen_seq": record.request_serial_number,  # legacy alias
         "created_at": record.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if record.created_at else None,
         "tags": [t.name for t in record.tags],
         "source_image": record.source_image,

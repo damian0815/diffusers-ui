@@ -1,6 +1,6 @@
 """Unit tests for model merge: definition-time validation + inference-time blend."""
+import logging
 import torch
-import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -71,6 +71,51 @@ def test_merge_accumulates_in_native_dtype(tmp_path):
     e2 = make_local_entry("k2", "B", d2)
     merged = _merge_transformer_state_dicts([e1, e2], [1.0, 1.0])
     assert merged["a"].dtype == torch.float16
+
+
+def test_merge_progressive_three_equal(tmp_path):
+    d1 = make_fake_sana_dir(tmp_path, "a", ["a", "b"])
+    d2 = make_fake_sana_dir(tmp_path, "b", ["a", "b"])
+    d3 = make_fake_sana_dir(tmp_path, "c", ["a", "b"])
+    e1 = make_local_entry("k1", "A", d1)
+    e2 = make_local_entry("k2", "B", d2)
+    e3 = make_local_entry("k3", "C", d3)
+    merged = _merge_transformer_state_dicts([e1, e2, e3], [1.0, 1.0, 1.0])
+    assert set(merged.keys()) == {"a", "b"}
+
+    from safetensors import safe_open
+    with safe_open(str(d1 / "transformer" / "diffusion_pytorch_model.safetensors"), framework="pt", device="cpu") as h:
+        t1 = h.get_tensor("a")
+    with safe_open(str(d2 / "transformer" / "diffusion_pytorch_model.safetensors"), framework="pt", device="cpu") as h:
+        t2 = h.get_tensor("a")
+    with safe_open(str(d3 / "transformer" / "diffusion_pytorch_model.safetensors"), framework="pt", device="cpu") as h:
+        t3 = h.get_tensor("a")
+    expected = (t1 + t2 + t3) / 3
+    assert torch.allclose(merged["a"], expected)
+
+
+def test_merge_progressive_asymmetric(tmp_path):
+    d1 = make_fake_sana_dir(tmp_path, "a", ["a"])
+    d2 = make_fake_sana_dir(tmp_path, "b", ["a"])
+    d3 = make_fake_sana_dir(tmp_path, "c", ["a"])
+    d4 = make_fake_sana_dir(tmp_path, "d", ["a"])
+    e1 = make_local_entry("k1", "A", d1)
+    e2 = make_local_entry("k2", "B", d2)
+    e3 = make_local_entry("k3", "C", d3)
+    e4 = make_local_entry("k4", "D", d4)
+    merged = _merge_transformer_state_dicts([e1, e2, e3, e4], [1.0, 1.0, 2.0, 1.0])
+
+    from safetensors import safe_open
+    with safe_open(str(d1 / "transformer" / "diffusion_pytorch_model.safetensors"), framework="pt", device="cpu") as h:
+        t1 = h.get_tensor("a")
+    with safe_open(str(d2 / "transformer" / "diffusion_pytorch_model.safetensors"), framework="pt", device="cpu") as h:
+        t2 = h.get_tensor("a")
+    with safe_open(str(d3 / "transformer" / "diffusion_pytorch_model.safetensors"), framework="pt", device="cpu") as h:
+        t3 = h.get_tensor("a")
+    with safe_open(str(d4 / "transformer" / "diffusion_pytorch_model.safetensors"), framework="pt", device="cpu") as h:
+        t4 = h.get_tensor("a")
+    expected = t1 / 5 + t2 / 5 + 2 * t3 / 5 + t4 / 5
+    assert torch.allclose(merged["a"], expected)
 
 
 def test_resolve_transformer_sd_paths_single(tmp_path):
@@ -150,18 +195,22 @@ def test_loader_without_registry_raises(tmp_path):
 
 
 def test_bnb_8bit_cast_warning_is_suppressed():
-    bnb_message = "MatMul8bitLt: inputs will be cast from torch.bfloat16 to float16 during quantization"
-    logged = []
-    orig_showwarning = warnings.showwarning
-
-    def fake_showwarning(message, category, filename, lineno, file=None, line=None):
-        logged.append(str(message))
-
-    warnings.showwarning = fake_showwarning
+    logger = logging.getLogger("bitsandbytes.autograd._functions")
+    emitted = []
+    handler = logging.Handler()
+    handler.emit = lambda record: emitted.append(record.getMessage())
+    logger.addHandler(handler)
+    old_level, old_propagate = logger.level, logger.propagate
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
     try:
-        warnings.warn(bnb_message)
-        warnings.warn("some unrelated warning")
+        logger.warning(
+            "MatMul8bitLt: inputs will be cast from torch.bfloat16 to float16 during quantization"
+        )
+        logger.warning("some unrelated warning")
     finally:
-        warnings.showwarning = orig_showwarning
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+        logger.propagate = old_propagate
 
-    assert logged == ["some unrelated warning"]
+    assert emitted == ["some unrelated warning"]

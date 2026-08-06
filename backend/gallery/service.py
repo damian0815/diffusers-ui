@@ -102,9 +102,13 @@ class GalleryService:
         image_name: str,
         board_id: str,
         model_name: str,
-        gen_seq: int | None = None,
+        request_serial_number: int | None = None,
     ) -> ImageRecord:
         """Persist a generated image record in the given gallery.
+
+        ``request_serial_number`` is the submission serial (= QueueItem.item_id),
+        constant from enqueue through generation so the gallery can be sorted
+        by submission order.
 
         If ``item.params.init_image`` is set (img2img), the source image file
         is copied into a dedicated "Image To Image Sources" board so it has a
@@ -126,7 +130,7 @@ class GalleryService:
             sampler=p.sampler,
             model_key=p.model_key,
             model_name=model_name,
-            gen_seq=gen_seq,
+            request_serial_number=request_serial_number,
             source_width=p.source_width,
             source_height=p.source_height,
             strength=p.strength,
@@ -250,7 +254,7 @@ class GalleryService:
         starred_only: bool = False,
         offset: int = 0,
         limit: int = 50,
-        sort_by: str = "gen_seq",
+        sort_by: str = "request_serial_number",
         sort_dir: str = "desc",
         starred_first: bool = False,
     ) -> list[ImageRecord]:
@@ -261,10 +265,12 @@ class GalleryService:
         gallery = await self.get_gallery(board_id)
         gallery_id = gallery.id if gallery else None
 
+        # "gen_seq" kept as a legacy alias for clients that haven't migrated.
         sort_column = {
-            "gen_seq": ImageRecord.gen_seq,
+            "request_serial_number": ImageRecord.request_serial_number,
+            "gen_seq": ImageRecord.request_serial_number,
             "created_at": ImageRecord.created_at,
-        }.get(sort_by, ImageRecord.gen_seq)
+        }.get(sort_by, ImageRecord.request_serial_number)
 
         order_col = sort_column.desc().nullslast() if sort_dir == "desc" else sort_column.asc().nullslast()
 

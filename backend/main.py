@@ -83,12 +83,13 @@ async def lifespan(app: FastAPI):
     # Restore persisted queue state ------------------------------------------
     await _restore_queue()
 
+    # Ensure the submission serial (QueueItem.item_id) never collides with an
+    # existing gallery request_serial_number, even after the queue has been
+    # fully pruned and the process restarted (which resets the id counter).
+    await _init_submission_serial()
+
     # Restore batch-size settings so the UI doesn't reset to "auto".
     worker.load_batch_state()
-
-    # Initialize gen_seq counter from DB so gallery submission order reflects
-    # processing order (not enqueue order).
-    await worker.init_gen_seq()
 
     # Start background worker
     task = asyncio.create_task(worker.run())
@@ -156,6 +157,28 @@ async def _restore_queue() -> None:
         )
     except Exception:
         logger.exception("Failed to restore queue from DB — starting with empty queue.")
+
+
+async def _init_submission_serial() -> None:
+    """Raise the QueueItem id counter so new submission serials exceed every
+    ``request_serial_number`` already stored in the gallery.
+
+    ``_init_counter`` only ever raises the counter (never lowers it), so this
+    composes safely with ``_restore_queue``'s own raise to the max restored
+    queue item id.  Without this, a fresh process after a full prune would
+    restart the id counter at 0 and new submissions could reuse serials that
+    already exist in the gallery, breaking submission-order sorting.
+    """
+    from sqlalchemy import func, select
+    from backend.gallery.models import ImageRecord
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(func.max(ImageRecord.request_serial_number)))
+            max_serial = result.scalar()
+            if max_serial is not None:
+                _init_counter(int(max_serial))
+    except Exception:
+        logger.exception("Failed to initialize submission serial counter from gallery DB")
 
 
 async def _ensure_default_gallery() -> str:

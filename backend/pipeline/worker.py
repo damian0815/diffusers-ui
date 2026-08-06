@@ -153,9 +153,10 @@ class PipelineWorker:
         self._mem_advisor = MemoryAdvisor(device=settings.device)
         # Rolling-window timing tracker for ETA calculation.
         self._timing_tracker = _GenerationTimingTracker()
-        # Monotonically increasing gen_seq counter, assigned at processing time
-        # (not enqueue time) so gallery "Submission" sort reflects processing order.
-        self._gen_seq_counter: int = 0
+        # Key of the model currently loaded in the PipelineLoader. Used to
+        # prefer same-model work when choosing the next batch, minimising
+        # model swaps. None until the first batch loads a model.
+        self._loaded_model_key: str | None = None
         # Track currently loaded LoRAs to avoid redundant load/unload cycles.
         self._loaded_loras: set[str] = set()
 
@@ -171,8 +172,12 @@ class PipelineWorker:
             await self._paused.wait()
 
             try:
-                # Get exactly one item (blocks until available).
-                items = await self._queue.next_pending_batch_window(0, limit=1)
+                # Get exactly one item (blocks until available). When a model
+                # is already loaded, prefer a pending item that uses it so we
+                # minimise model-swap time.
+                items = await self._queue.next_pending_batch_window(
+                    0, limit=1, preferred_model_key=self._loaded_model_key
+                )
             except asyncio.CancelledError:
                 break
             if not items:
@@ -262,21 +267,6 @@ class PipelineWorker:
             self._mem_advisor.load_state(self._batch_state_path)
         except Exception:
             logger.warning("Failed to load batch-size state", exc_info=True)
-
-    async def init_gen_seq(self) -> None:
-        """Initialize the gen_seq counter from the highest existing value in the DB."""
-        if self._session_factory is None:
-            return
-        try:
-            from sqlalchemy import select, func
-            from backend.gallery.models import ImageRecord
-            async with self._session_factory() as session:
-                result = await session.execute(select(func.max(ImageRecord.gen_seq)))
-                max_seq = result.scalar()
-                if max_seq is not None:
-                    self._gen_seq_counter = int(max_seq)
-        except Exception:
-            logger.warning("Failed to load max gen_seq from DB", exc_info=True)
 
     def set_max_batch_size(self, n: int) -> None:
         """Set a user cap on batch size (0 = auto, let the advisor decide).
@@ -472,6 +462,8 @@ class PipelineWorker:
                 )
             logger.error("Pipeline load failed: %s", exc)
             return False
+
+        self._loaded_model_key = entry.key
 
         # Swap scheduler based on sampler (not applicable to SANA — it uses its
         # own FlowMatchEulerDiscreteScheduler and we leave it untouched)
@@ -867,9 +859,8 @@ class PipelineWorker:
                 service = GalleryService(session)
                 record = await service.record_image(
                     item, image_name, board_id, model_name,
-                    gen_seq=self._gen_seq_counter,
+                    request_serial_number=item.item_id,
                 )
-                self._gen_seq_counter += 1
                 await session.commit()
                 # Build event payload (same shape as _image_record_to_dict / _image_record_to_dict)
                 created_at = record.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if record.created_at else None
@@ -891,7 +882,7 @@ class PipelineWorker:
                     "lora_keys": item.params.lora_keys,
                     "lora_strengths": item.params.lora_strengths,
                     "starred": False,
-                    "gen_seq": record.gen_seq,
+                    "request_serial_number": record.request_serial_number,
                     "created_at": created_at,
                     "tags": [],
                 }

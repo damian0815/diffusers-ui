@@ -319,24 +319,30 @@ function app() {
 
       this.isEnqueuing = true;
 
-      // Expand {a|b|c} brace syntax into a list of prompt variants.
+      // Expand {a|b|c} brace syntax into prompt variants. The negative prompt
+      // expands independently; the cartesian product of both is enqueued.
       const variants = this._expandBraces(this.prompt);
+      const negVariants = this._expandBraces(this.negativePrompt);
 
-      // Optimistic placeholders — one per variant so the badge reacts immediately.
-      const tempIds = variants.map((_, i) => `_opt_${Date.now()}_${i}`);
+      // Optimistic placeholders — one per (prompt × negative) combo so the badge reacts immediately.
+      const tempIds = variants.flatMap((_, i) =>
+        negVariants.map((_, j) => `_opt_${Date.now()}_${i}_${j}`)
+      );
       this.queueItems = [...this.queueItems, ...tempIds];
 
       try {
         const allRealIds = [];
         for (const variant of variants) {
-          const resp = await fetch('/api/v1/queue/default/enqueue_batch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(this._buildEnqueueBody(prepend, variant)),
-          });
-          if (!resp.ok) throw new Error(await resp.text());
-          const data = await resp.json();
-          allRealIds.push(...data.items.map(i => i.item_id));
+          for (const negVariant of negVariants) {
+            const resp = await fetch('/api/v1/queue/default/enqueue_batch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(this._buildEnqueueBody(prepend, variant, negVariant)),
+            });
+            if (!resp.ok) throw new Error(await resp.text());
+            const data = await resp.json();
+            allRealIds.push(...data.items.map(i => i.item_id));
+          }
         }
         // Replace all optimistic placeholders with the real IDs.
         // Use a Set to prevent duplicates in case the ws-gallery-event for
@@ -371,15 +377,18 @@ function app() {
       });
     },
 
-    // Total number of items that will be enqueued given current prompt + batchCount.
+    // Total number of items that will be enqueued given current prompt,
+    // negative prompt, and batchCount.
     _totalGenCount() {
-      return this._expandBraces(this.prompt).length * this.batchCount;
+      return this._expandBraces(this.prompt).length
+           * this._expandBraces(this.negativePrompt).length
+           * this.batchCount;
     },
 
-    _buildEnqueueBody(prepend, promptOverride = null) {
+    _buildEnqueueBody(prepend, promptOverride = null, negOverride = null) {
       const batch = {
         prompt: promptOverride ?? this.prompt,
-        negative_prompt: this.negativePrompt,
+        negative_prompt: negOverride ?? this.negativePrompt,
         seed: this.seed, width: this.width, height: this.height,
         steps: this.steps, cfg: this.cfg,
         cfg_rescale_multiplier: this.cfgRescale,

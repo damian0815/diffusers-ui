@@ -131,3 +131,52 @@ async def test_batch_window_waits_for_items():
     assert len(items) == 1
     await task
 
+
+@pytest.mark.asyncio
+async def test_batch_window_prefers_loaded_model(qm):
+    """When a preferred model is given, an item using it is picked as the pivot
+    even if it is not at the head of the queue."""
+    head = await qm.enqueue(QueueItem(params=make_params(model_key="model_b")))
+    preferred = await qm.enqueue(QueueItem(params=make_params(model_key="model_a")))
+    other = await qm.enqueue(QueueItem(params=make_params(model_key="model_a")))
+
+    items = await qm.next_pending_batch_window(0, limit=1, preferred_model_key="model_a")
+    assert [i.item_id for i in items] == [preferred.item_id]
+
+    # The skipped head stays in the queue for the next call.
+    next_items = await qm.next_pending_batch_window(0, limit=1)
+    assert next_items[0].item_id == head.item_id
+
+
+@pytest.mark.asyncio
+async def test_batch_window_preference_falls_back_to_fifo(qm):
+    """If no pending item uses the preferred model, the queue head is returned."""
+    a = await qm.enqueue(QueueItem(params=make_params(model_key="model_b")))
+    b = await qm.enqueue(QueueItem(params=make_params(model_key="model_b")))
+    items = await qm.next_pending_batch_window(0, limit=1, preferred_model_key="model_a")
+    assert [i.item_id for i in items] == [a.item_id]
+    assert items[0].item_id != b.item_id
+
+
+@pytest.mark.asyncio
+async def test_batch_window_preference_never_skips_priority(qm):
+    """A priority (run-now) item at the head wins over the model preference."""
+    priority = await qm.enqueue(QueueItem(params=make_params(model_key="model_a")), prepend=True)
+    await qm.enqueue(QueueItem(params=make_params(model_key="model_a")))
+    items = await qm.next_pending_batch_window(0, limit=1, preferred_model_key="model_a")
+    assert items[0].item_id == priority.item_id
+
+
+@pytest.mark.asyncio
+async def test_batch_window_preference_scan_is_bounded(monkeypatch):
+    """The preferred-model scan only looks a bounded distance from the head,
+    so a long run of another model cannot be starved."""
+    from backend.queue import manager as qm_mod
+    monkeypatch.setattr(qm_mod, "PREFERRED_MODEL_SCAN_LIMIT", 2)
+    qm = QueueManager()
+    for _ in range(2):
+        await qm.enqueue(QueueItem(params=make_params(model_key="model_b")))
+    target = await qm.enqueue(QueueItem(params=make_params(model_key="model_a")))
+    items = await qm.next_pending_batch_window(0, limit=1, preferred_model_key="model_a")
+    assert items[0].item_id != target.item_id  # outside the scan window
+

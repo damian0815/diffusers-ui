@@ -468,9 +468,10 @@ async def move_item_to_front(queue_id: str, item_id: int, request: Request):
 def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
     """
     Return an image-record-shaped dict for a QueueItem.
-    Fields that are only known after generation (image_name, gen_seq,
-    created_at, starred, tags) are returned as None / empty defaults.
-    Extra queue fields (item_id, status) are included for caller convenience.
+    Fields that are only known after generation (image_name,
+    request_serial_number, created_at, starred, tags) are returned as None /
+    empty defaults.  Extra queue fields (item_id, status) are included for
+    caller convenience.
     """
     p = item.params
     return {
@@ -501,7 +502,8 @@ def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
         "lora_keys": p.lora_keys,
         "lora_strengths": p.lora_strengths,
         "starred": False,
-        "gen_seq": None,
+        "request_serial_number": None,
+        "gen_seq": None,  # legacy alias
         "created_at": None,
         "tags": [],
     }

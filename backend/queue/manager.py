@@ -8,6 +8,11 @@ logger = logging.getLogger(__name__)
 
 QUEUE_POLL_INTERVAL_S = 0.05
 
+# How many slots of the queue head we may scan for a preferred-model item
+# before falling back to strict FIFO.  Bounds the reordering so a long run of
+# another model can't be starved by sustained same-model submissions.
+PREFERRED_MODEL_SCAN_LIMIT = 32
+
 
 class QueueManager:
     """
@@ -92,11 +97,21 @@ class QueueManager:
             self._queue.appendleft(item)
         return True
 
-    async def next_pending_batch_window(self, window_s: float, limit: int=100) -> list[QueueItem]:
+    async def next_pending_batch_window(
+        self,
+        window_s: float,
+        limit: int=100,
+        preferred_model_key: str | None = None,
+    ) -> list[QueueItem]:
         """
         Wait until at least one pending item is available, then collect all
         items that arrive within ``window_s`` seconds.  Returns an empty list
         if ``abort_wait()`` was called (shutdown signal).
+
+        If *preferred_model_key* is given, the first collected item is chosen
+        with ``_pop_preferred_pivot`` — a pending non-priority item that uses
+        that model, so the worker can minimise model swaps.  Falls back to the
+        queue head when no preferred item is found (or the head is priority).
         """
         await self._new_item_event.wait()
 
@@ -109,6 +124,10 @@ class QueueManager:
         async with self._lock:
             self._new_item_event.clear()
             collected: list[QueueItem] = []
+            if preferred_model_key is not None:
+                pivot = self._pop_preferred_pivot(preferred_model_key)
+                if pivot is not None:
+                    collected.append(pivot)
             while self._queue and len(collected) < limit:
                 item = self._queue.popleft()
                 if item.status == ItemStatus.PENDING:
@@ -118,6 +137,25 @@ class QueueManager:
             else:
                 self._new_item_event.set()
         return collected
+
+    def _pop_preferred_pivot(self, preferred_model_key: str) -> QueueItem | None:
+        """
+        Pop the first pending non-priority item that uses *preferred_model_key*,
+        scanning at most ``PREFERRED_MODEL_SCAN_LIMIT`` slots from the head.
+
+        Returns None (caller falls back to the head) when the head is a
+        priority item or no preferred item is found in the scan window.
+        """
+        scan = min(PREFERRED_MODEL_SCAN_LIMIT, len(self._queue))
+        for i in range(scan):
+            item = self._queue[i]
+            if item.status == ItemStatus.PENDING:
+                if item.priority:
+                    return None  # never reorder around a run-now item
+                if item.params.model_key == preferred_model_key:
+                    del self._queue[i]
+                    return item
+        return None
 
     async def dequeue_matching(
         self,

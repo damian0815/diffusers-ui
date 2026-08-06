@@ -3,19 +3,38 @@ from __future__ import annotations
 import gc
 import logging
 import types
-import warnings
-
-warnings.filterwarnings(
-    "ignore",
-    message=r"MatMul8bitLt: inputs will be cast from .* to float16 during quantization",
-)
 
 import torch
 from diffusers import SanaPAGPipeline
 from diffusers.utils.torch_utils import randn_tensor
+from tqdm.auto import tqdm
 
 from backend.config import settings
 from backend.domain import ModelEntry
+
+class _MatMulCastLogFilter(logging.Filter):
+    """Drop bitsandbytes' dtype-cast notice (a log record, not a warning)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "MatMul8bitLt: inputs will be cast from" not in record.getMessage()
+
+
+def _suppress_bnb_cast_log_noise() -> None:
+    """Silence the per-matmul "inputs will be cast ... to float16" log line.
+
+    Bitsandbytes emits this via the ``logging`` module on every quantized
+    matmul (including during generation), so a ``warnings.filterwarnings``
+    never suppressed it. Attaching a filter to the emitting logger is
+    process-global once done, so it also holds across the worker thread and
+    asyncio tasks regardless of import order or logging configuration.
+    """
+    logging.getLogger("bitsandbytes.autograd._functions").addFilter(
+        _MatMulCastLogFilter()
+    )
+
+
+_suppress_bnb_cast_log_noise()
+
 
 class PipelineLoadError(Exception):
     """Raised when a pipeline fails to load."""
@@ -372,47 +391,71 @@ def validate_merge_components(components: list[ModelEntry]) -> None:
         raise ModelMergeError("Merge architecture mismatch", incompatible=incompatible)
 
 
-def _merge_transformer_state_dicts(
-    components: list[ModelEntry], weights: list[float]
-) -> dict:
-    """Blend the transformer state dicts of ``components`` in CPU RAM.
+def _load_component_state_dict(entry: ModelEntry) -> dict:
+    """Load a component's transformer tensors into a plain CPU dict.
 
-    For each key: weighted sum over all components, accumulating in the dtype
-    of the first tensor encountered (native dtype). Alphas are normalized over
-    the sum of all weights. Closes all safetensors handles (mmaps) on exit.
+    Opens the component's safetensors shards, reads every tensor at its native
+    dtype, and closes the handles (mmaps) in a ``finally`` so only the returned
+    tensors stay in RAM.
     """
     from safetensors import safe_open
 
-    def _open_component(entry: ModelEntry):
+    handles = [
+        safe_open(str(p), framework="pt", device="cpu")
+        for p in _resolve_transformer_sd_paths(entry)
+    ]
+    try:
+        state_dict: dict[str, torch.Tensor] = {}
+        for h in handles:
+            for key in h.keys():
+                state_dict[key] = h.get_tensor(key)
+        return state_dict
+    finally:
+        _close_safetensors_handles(handles)
+
+
+def _merge_transformer_state_dicts(
+    components: list[ModelEntry], weights: list[float]
+) -> dict:
+    """Progressive weighted blend of transformer state dicts in CPU RAM.
+
+    Loads component 0 into ``merged``, then folds each remaining component in
+    one at a time at the running alpha ``a_i = w_i / sum(w_1..w_i)``, which
+    yields exactly the weighted mean of all components. Each key is updated in
+    place via ``mul_`` / ``add_``, casting the incoming tensor to the
+    accumulated dtype. Only one extra component's tensors are in RAM at a time
+    (one tensor per key) and only one component's safetensors handles are open
+    at a time.
+    """
+    merged = _load_component_state_dict(components[0])
+    if len(components) == 1:
+        return merged
+
+    from safetensors import safe_open
+
+    prefix = weights[0]
+    for i in tqdm(range(1, len(components))):
+        prefix += weights[i]
+        alpha = weights[i] / prefix
+
         handles = [
             safe_open(str(p), framework="pt", device="cpu")
-            for p in _resolve_transformer_sd_paths(entry)
+            for p in _resolve_transformer_sd_paths(components[i])
         ]
-        key_sets = [set(h.keys()) for h in handles]     # cache per-handle
-        return handles, set().union(*key_sets), key_sets
-
-    component_data = [_open_component(e) for e in components]
-    try:
-        total = sum(weights)
-        alphas = [w / total for w in weights]
-        ref_dtype = None
-        merged: dict[str, torch.Tensor] = {}
-
-        for key in component_data[0][1]:
-            acc = None
-            for (handles, _, key_sets), alpha in zip(component_data, alphas):
-                idx = next(i for i, ks in enumerate(key_sets) if key in ks)
-                t = handles[idx].get_tensor(key)
-                if ref_dtype is None:
-                    ref_dtype = t.dtype
-                t = t.to(ref_dtype)
-                acc = t * alpha if acc is None else acc + t * alpha
-            merged[key] = acc
-
-        return merged
-    finally:
-        for handles, _, _ in component_data:
+        try:
+            key_to_handle = {}
+            for h in handles:
+                for key in h.keys():
+                    key_to_handle[key] = h
+            for key, acc in tqdm(merged.items()):
+                t = key_to_handle[key].get_tensor(key)
+                if t.dtype != acc.dtype:
+                    t = t.to(acc.dtype)
+                acc.mul_(1 - alpha).add_(t, alpha=alpha)
+        finally:
             _close_safetensors_handles(handles)
+
+    return merged
 
 
 def _load_merge_pipeline(entry: ModelEntry, registry) -> object:
