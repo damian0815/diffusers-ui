@@ -144,6 +144,7 @@ class ModelEntry:
     hf_api_key: str | None = None        # stored only if user provided one
     quantization: str | None = None      # 'int8', 'int4', or None (SANA only for now)
     merge: list[MergeComponent] | None = None   # present only on merge entries
+    kind: str = "model"                  # 'model' or 'lora' (scan candidates only)
 
     def __post_init__(self) -> None:
         if self.merge is not None:

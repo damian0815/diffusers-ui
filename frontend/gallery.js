@@ -1,5 +1,7 @@
 /* frontend/gallery.js — Gallery panel Alpine.js component */
 
+const GALLERY_STATE_KEY = 'diffusers-ui:gallery-state';
+
 function gallery() {
   return {
     galleries: [],
@@ -61,6 +63,7 @@ function gallery() {
     },
 
     async init() {
+      this._restoreGalleryUiState();
       await this.loadGalleries();
       this._notifyBoardChanged();
       this.$watch('selectedBoardId', (newVal, oldVal) => {
@@ -68,6 +71,11 @@ function gallery() {
         this._saveGalleryState(oldVal);
       });
       this.$watch('selectedImageName', () => this._saveGalleryState(this.selectedBoardId));
+
+      for (const f of ['selectedBoardId', 'search', 'sortBy', 'sortDir', 'starredFirst', 'thumbsPerRow']) {
+        this.$watch(f, () => this._persistGalleryUiState());
+      }
+      window.addEventListener('pagehide', () => this._persistGalleryUiState(true));
 
       this.setupInfiniteScroll();
       this.setupArrowNav();
@@ -173,8 +181,10 @@ function gallery() {
         if (!resp.ok) return;
         this.galleries = await resp.json();
         this._notifyGalleriesUpdated();
-        if (this.galleries.length > 0 && !this.selectedBoardId) {
-          this.selectedBoardId = this.galleries[0].board_id;
+        if (this.galleries.length > 0) {
+          if (!this.galleries.some(g => g.board_id === this.selectedBoardId)) {
+            this.selectedBoardId = this.galleries[0].board_id;
+          }
           this._pendingRestore = true;
           await this.loadMore();
         }
@@ -205,6 +215,31 @@ function gallery() {
 
     _galleryStateKey(boardId) {
       return `gallery-state:${boardId}`;
+    },
+
+    _restoreGalleryUiState() {
+      const saved = Persist.get(GALLERY_STATE_KEY, {});
+      if (!saved || typeof saved !== 'object') return;
+      if (typeof saved.selectedBoardId === 'string') this.selectedBoardId = saved.selectedBoardId;
+      if (typeof saved.search === 'string')          this.search = saved.search;
+      if (typeof saved.sortBy === 'string')          this.sortBy = saved.sortBy;
+      if (typeof saved.sortDir === 'string')         this.sortDir = saved.sortDir;
+      if (typeof saved.starredFirst === 'boolean')   this.starredFirst = saved.starredFirst;
+      const cols = parseInt(saved.thumbsPerRow);
+      if (cols >= 1 && cols <= 8) this.thumbsPerRow = cols;
+    },
+
+    _persistGalleryUiState(flush = false) {
+      const state = {
+        selectedBoardId: this.selectedBoardId,
+        search: this.search,
+        sortBy: this.sortBy,
+        sortDir: this.sortDir,
+        starredFirst: this.starredFirst,
+        thumbsPerRow: this.thumbsPerRow,
+      };
+      if (flush) Persist.flush(GALLERY_STATE_KEY, state);
+      else Persist.setDebounced(GALLERY_STATE_KEY, state);
     },
 
     _saveGalleryState(boardId) {
@@ -735,4 +770,6 @@ function gallery() {
 document.addEventListener('alpine:init', () => {
   Alpine.data('gallery', gallery);
 });
+
+window.gallery = gallery;
 

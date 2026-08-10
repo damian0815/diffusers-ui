@@ -9,6 +9,7 @@
   <script src="/preview.js" defer></script>
   <script src="/ti.js"      defer></script>
   <script src="/layout.js"  defer></script>
+  <script src="/persist.js" defer></script>
   <script src="/vendor/alpine.min.js" defer></script>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -1271,12 +1272,13 @@
               <div class="model-discover-name" x-text="c.name"></div>
               <div class="model-discover-meta">
                 <span class="model-base-badge" x-text="c.base"></span>
+                <span x-show="c.kind === 'lora'" class="model-base-badge lora-badge">LoRA</span>
                 <span class="model-discover-source" x-text="c.source"></span>
               </div>
             </div>
             <div class="model-discover-actions">
               <select class="quant-select"
-                      x-show="!isInstalled(c)"
+                      x-show="!isInstalled(c) && c.kind !== 'lora'"
                       @change="c.quantization = $event.target.value"
                       title="Quantization (requires bitsandbytes)">
                 <option value="">No quantization</option>
@@ -1285,7 +1287,7 @@
               </select>
               <button class="btn-secondary"
                       :disabled="isInstalled(c)"
-                      @click="registerCandidate(c)"
+                      @click="c.kind === 'lora' ? installLoraCandidate(c) : registerCandidate(c)"
                       x-text="isInstalled(c) ? '✓ Installed' : '+ Add'"></button>
             </div>
           </div>

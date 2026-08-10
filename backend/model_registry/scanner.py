@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from backend.domain import ModelEntry
+
+LORA_WEIGHTS_FILENAME = "pytorch_lora_weights.safetensors"
 
 
 def scan_hf_cache() -> list[ModelEntry]:
@@ -46,26 +49,75 @@ def scan_hf_cache() -> list[ModelEntry]:
 
 def scan_local_dir(directory: Path) -> list[ModelEntry]:
     """
-    Walk `directory` looking for subdirectories that contain a
-    `model_index.json` (diffusers pipeline marker).
+    Recursively walk ``directory`` for two kinds of candidates:
+
+    - diffusers pipelines, marked by a ``model_index.json`` file
+    - LoRA folders, marked by a ``pytorch_lora_weights.safetensors`` file
+
     Returns ModelEntry candidates. Does NOT write to the registry.
     """
     if not directory.is_dir():
         return []
 
     candidates: list[ModelEntry] = []
-    for child in directory.iterdir():
-        if child.is_dir() and _looks_like_pipeline(child):
-            candidates.append(
-                ModelEntry(
-                    key=str(child.resolve()),
-                    name=child.name,
-                    base=_detect_base(child),
-                    source=str(child.resolve()),
-                    source_type="local_path",
-                )
-            )
+    for root, dirs, _files in os.walk(directory):
+        root_path = Path(root)
+        if _looks_like_pipeline(root_path):
+            candidates.append(_pipeline_entry(root_path))
+            # Don't descend into the pipeline's submodules (unet/, vae/, …)
+            dirs[:] = []
+            continue
+        lora_file = root_path / LORA_WEIGHTS_FILENAME
+        if lora_file.is_file():
+            candidates.append(_lora_entry(root_path, lora_file))
+            # Don't descend into the LoRA folder's internals
+            dirs[:] = []
+            continue
     return candidates
+
+
+def _pipeline_entry(pipeline_dir: Path) -> ModelEntry:
+    """Build a ModelEntry candidate for a diffusers pipeline directory."""
+    return ModelEntry(
+        key=str(pipeline_dir.resolve()),
+        name=pipeline_dir.name,
+        base=_detect_base(pipeline_dir),
+        source=str(pipeline_dir.resolve()),
+        source_type="local_path",
+    )
+
+
+def _lora_entry(lora_dir: Path, weights_file: Path) -> ModelEntry:
+    """Build a ModelEntry candidate for a LoRA folder."""
+    return ModelEntry(
+        key=str(weights_file.resolve()),
+        name=lora_dir.name,
+        base=detect_lora_base(weights_file),
+        source=str(lora_dir.resolve()),
+        source_type="local_path",
+        kind="lora",
+    )
+
+
+def detect_lora_base(weights_file: Path) -> str:
+    """
+    Best-effort LoRA base detection from the safetensors key prefixes.
+    Falls back to a name-based guess when the header can't be read.
+    """
+    try:
+        from safetensors import safe_open
+        with safe_open(str(weights_file), framework="pt") as f:
+            keys = list(f.keys())
+    except Exception:
+        return _guess_base_from_name(weights_file.parent.name)
+
+    if any("lora_transformer" in k for k in keys):
+        return "sana"
+    if any("lora_te1" in k or "lora_te2" in k for k in keys):
+        return "sdxl"
+    if any("lora_te_text_model" in k for k in keys):
+        return "sd-1"
+    return _guess_base_from_name(weights_file.parent.name)
 
 
 def _looks_like_pipeline(path: Path) -> bool:

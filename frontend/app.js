@@ -1,5 +1,13 @@
 /* frontend/app.js — Control panel Alpine.js component */
 
+const UI_STATE_KEY = 'diffusers-ui:app-state';
+const UI_STATE_SCALARS = [
+  'prompt', 'negativePrompt', 'seed', 'width', 'height', 'steps', 'cfg',
+  'cfgRescale', 'sampler', 'predictionType', 'batchCount', 'autoSelectLatest',
+  'showPreview', 'showInfoOverlay', 'lockAspectRatio', 'selectedAspectRatio',
+  'sourceStrength', 'activeTab', 'localScanPath', 'modelKey', 'targetBoardId',
+];
+
 function app() {
   return {
     // ---- Form state ----
@@ -124,12 +132,15 @@ function app() {
       });
       window.addEventListener('galleries-updated', (e) => {
         this._galleries = e.detail.galleries || [];
+        this._validateTargetBoard();
       });
 
+      this._restoreUiState();
       Layout.init();
       await this.loadModels();
       await this.fetchLoras();
       await this.loadEmbeddings();
+      this._validateRestoredUiState();
       this._updateResolutionStep();
       this.setupKeyboardShortcuts();
       this.loadWorkerStatus();
@@ -139,28 +150,21 @@ function app() {
       this._finishedItemIds = new Set();
 
       // Auto-refresh queue details when on the queue tab
-      this.$watch('activeTab', (tab) => {
-        clearInterval(this._queueTimer);
-        this._queueTimer = null;
-        if (tab === 'queue') {
-          this.loadQueueDetails();
-          this._queueTimer = setInterval(() => {
-            if (this.activeTab === 'queue') this.loadQueueDetails();
-          }, 2000);
-        }
-      });
+      this._handleTabChange(this.activeTab);
+      this.$watch('activeTab', (tab) => this._handleTabChange(tab));
 
       this.$watch('modelKey', () => this._updateResolutionStep());
-
-      // Restore persisted local scan path
-      try {
-        const saved = localStorage.getItem('localScanPath');
-        if (saved) this.localScanPath = saved;
-      } catch (_) {}
-
-      this.$watch('localScanPath', (val) => {
-        try { localStorage.setItem('localScanPath', val); } catch (_) {}
-      });
+      for (const f of UI_STATE_SCALARS) {
+        this.$watch(f, () => this._persistUiState());
+      }
+      this.$watch('activeLoras', () => this._persistUiState());
+      this.$watch('sourceImage', () => this._persistUiState());
+      this.$watch('cropRect', () => this._persistUiState());
+      this.$watch('hfInstall.repoId', () => this._persistUiState());
+      this.$watch('hfInstall.name', () => this._persistUiState());
+      this.$watch('hfInstall.base', () => this._persistUiState());
+      this.$watch('hfInstall.quantization', () => this._persistUiState());
+      window.addEventListener('pagehide', () => this._persistUiState(true));
 
       // Keep the browser tab title in sync with pending job count.
       this.$watch('queueItems', (items) => {
@@ -256,6 +260,104 @@ function app() {
           }));
         } catch (e) {}
       });
+    },
+
+    // ----------------------------------------------------------------
+    // UI state persistence
+    // ----------------------------------------------------------------
+
+    _restoreUiState() {
+      const saved = Persist.get(UI_STATE_KEY, {});
+      if (!saved || typeof saved !== 'object') return;
+
+      for (const f of UI_STATE_SCALARS) {
+        if (saved[f] !== undefined) this[f] = saved[f];
+      }
+
+      if (Array.isArray(saved.activeLoras)) {
+        this.activeLoras = saved.activeLoras;
+      }
+      if (saved.sourceImage && typeof saved.sourceImage.width === 'number') {
+        this.sourceImage = saved.sourceImage;
+        const { width: sw, height: sh } = saved.sourceImage;
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+        if (saved.cropRect && typeof saved.cropRect.left === 'number') {
+          this.cropRect = {
+            left:   clamp(saved.cropRect.left,   0, Math.max(0, sw - 64)),
+            top:    clamp(saved.cropRect.top,    0, Math.max(0, sh - 64)),
+            width:  clamp(saved.cropRect.width,  64, sw),
+            height: clamp(saved.cropRect.height, 64, sh),
+          };
+        }
+      }
+      if (saved.hfInstall && typeof saved.hfInstall === 'object') {
+        if (typeof saved.hfInstall.repoId === 'string')        this.hfInstall.repoId = saved.hfInstall.repoId;
+        if (typeof saved.hfInstall.name === 'string')          this.hfInstall.name = saved.hfInstall.name;
+        if (typeof saved.hfInstall.base === 'string')          this.hfInstall.base = saved.hfInstall.base;
+        if (typeof saved.hfInstall.quantization === 'string')  this.hfInstall.quantization = saved.hfInstall.quantization;
+        this.hfInstall._nameAutoFilled = false;
+      }
+
+      this.batchCount = Math.max(1, parseInt(this.batchCount) || 1);
+      if (this.lockAspectRatio) this._aspectRatioValue = this.width / this.height;
+      this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
+    },
+
+    _persistUiState(flush = false) {
+      const state = {
+        prompt: this.prompt, negativePrompt: this.negativePrompt, seed: this.seed,
+        width: this.width, height: this.height, steps: this.steps, cfg: this.cfg,
+        cfgRescale: this.cfgRescale, sampler: this.sampler,
+        predictionType: this.predictionType, batchCount: this.batchCount,
+        autoSelectLatest: this.autoSelectLatest, showPreview: this.showPreview,
+        showInfoOverlay: this.showInfoOverlay, lockAspectRatio: this.lockAspectRatio,
+        selectedAspectRatio: this.selectedAspectRatio, sourceStrength: this.sourceStrength,
+        activeTab: this.activeTab, localScanPath: this.localScanPath,
+        modelKey: this.modelKey, targetBoardId: this.targetBoardId,
+        activeLoras: this.activeLoras, sourceImage: this.sourceImage,
+        cropRect: this.cropRect,
+        hfInstall: {
+          repoId: this.hfInstall.repoId,
+          name: this.hfInstall.name,
+          base: this.hfInstall.base,
+          quantization: this.hfInstall.quantization,
+        },
+      };
+      if (flush) Persist.flush(UI_STATE_KEY, state);
+      else Persist.setDebounced(UI_STATE_KEY, state);
+    },
+
+    _validateTargetBoard() {
+      if (this.targetBoardId
+          && !(this._galleries || []).some(g => g.board_id === this.targetBoardId)) {
+        this.targetBoardId = null;
+      }
+    },
+
+    _validateRestoredUiState() {
+      if (this.models.length > 0 && !this.models.some(m => m.key === this.modelKey)) {
+        this.modelKey = this.models[0].key;
+      }
+      this._validateTargetBoard();
+      if (this.loraEntries.length > 0) {
+        const names = new Set(this.loraEntries.map(l => l.filename));
+        this.activeLoras = this.activeLoras.filter(l => names.has(l.filename));
+      }
+      this._updateResolutionStep();
+      this.snapResolution();
+      this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
+      if (this.lockAspectRatio) this._aspectRatioValue = this.width / this.height;
+    },
+
+    _handleTabChange(tab) {
+      clearInterval(this._queueTimer);
+      this._queueTimer = null;
+      if (tab === 'queue') {
+        this.loadQueueDetails();
+        this._queueTimer = setInterval(() => {
+          if (this.activeTab === 'queue') this.loadQueueDetails();
+        }, 2000);
+      }
     },
 
     // ----------------------------------------------------------------
@@ -537,14 +639,17 @@ function app() {
       if (!filename || this.activeLoras.find(l => l.filename === filename)) return;
       this.activeLoras.push({ filename, strength: 1.0 });
       this._selectedLoraFile = '';
+      this._persistUiState();
     },
 
     removeLora(index) {
       this.activeLoras.splice(index, 1);
+      this._persistUiState();
     },
 
     updateLoraStrength(index, value) {
       this.activeLoras[index].strength = parseFloat(value);
+      this._persistUiState();
     },
 
     // ----------------------------------------------------------------
@@ -1154,6 +1259,9 @@ function app() {
     },
 
     isInstalled(candidate) {
+      if (candidate.kind === 'lora') {
+        return this.loraEntries.some(l => l.name === candidate.name);
+      }
       return this.models.some(m => m.source === candidate.source);
     },
 
@@ -1173,6 +1281,18 @@ function app() {
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
       } catch (e) { this._setError(`Register failed: ${e.message}`); }
+    },
+
+    async installLoraCandidate(candidate) {
+      try {
+        const body = { source: candidate.source, name: candidate.name };
+        const resp = await fetch('/api/v1/loras/install', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.fetchLoras();
+      } catch (e) { this._setError(`Install LoRA failed: ${e.message}`); }
     },
 
     // Extract "owner/repo" from a bare id or full HF URL.
@@ -1583,3 +1703,5 @@ function app() {
     },
   };
 }
+
+window.app = app;

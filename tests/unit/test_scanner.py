@@ -7,6 +7,8 @@ from backend.model_registry.scanner import (
     _looks_like_pipeline,
     _detect_base,
     _guess_base_from_name,
+    detect_lora_base,
+    LORA_WEIGHTS_FILENAME,
 )
 
 
@@ -42,6 +44,83 @@ def test_scan_local_dir_finds_multiple_pipelines(tmp_path):
         _write_index(d, vae=["diffusers", "AutoencoderKL"])
     results = scan_local_dir(tmp_path)
     assert len(results) == 2
+
+
+def test_scan_local_dir_recursive(tmp_path):
+    """Pipelines nested several levels deep are discovered."""
+    nested = tmp_path / "a" / "b" / "c" / "deep_model"
+    nested.mkdir(parents=True)
+    _write_index(nested, vae=["diffusers", "AutoencoderKL"])
+    results = scan_local_dir(tmp_path)
+    assert len(results) == 1
+    assert results[0].name == "deep_model"
+
+
+def test_scan_local_dir_does_not_descend_into_pipeline_submodules(tmp_path):
+    """Once a pipeline is found, its subdirs are not scanned again."""
+    d = tmp_path / "model"
+    d.mkdir()
+    _write_index(d, vae=["diffusers", "AutoencoderKL"])
+    (d / "unet").mkdir()
+    (d / "unet" / "model_index.json").write_text("{}")
+    results = scan_local_dir(tmp_path)
+    assert len(results) == 1
+    assert results[0].name == "model"
+
+
+def test_scan_local_dir_detects_lora_folder(tmp_path):
+    """A folder containing pytorch_lora_weights.safetensors is a LoRA candidate."""
+    lora_dir = tmp_path / "my_lora"
+    lora_dir.mkdir()
+    (lora_dir / LORA_WEIGHTS_FILENAME).write_bytes(b"\x00" * 8)
+    results = scan_local_dir(tmp_path)
+    assert len(results) == 1
+    r = results[0]
+    assert r.kind == "lora"
+    assert r.name == "my_lora"
+    assert r.source_type == "local_path"
+
+
+def test_scan_local_dir_detects_lora_recursively(tmp_path):
+    lora_dir = tmp_path / "x" / "y" / "detail_lora"
+    lora_dir.mkdir(parents=True)
+    (lora_dir / LORA_WEIGHTS_FILENAME).write_bytes(b"\x00" * 8)
+    results = scan_local_dir(tmp_path)
+    assert len(results) == 1
+    assert results[0].kind == "lora"
+
+
+def test_scan_local_dir_mixed_models_and_loras(tmp_path):
+    pipeline = tmp_path / "model_a"
+    pipeline.mkdir()
+    _write_index(pipeline, vae=["diffusers", "AutoencoderKL"])
+    lora = tmp_path / "loras" / "style"
+    lora.mkdir(parents=True)
+    (lora / LORA_WEIGHTS_FILENAME).write_bytes(b"\x00" * 8)
+    results = scan_local_dir(tmp_path)
+    kinds = sorted(r.kind for r in results)
+    assert kinds == ["lora", "model"]
+
+
+def test_detect_lora_base_via_safetensors_keys(tmp_path):
+    """SANA LoRA key prefixes map to the sana base."""
+    import torch
+    from safetensors.torch import save_file
+    lora_dir = tmp_path / "sana_lora"
+    lora_dir.mkdir()
+    f = lora_dir / LORA_WEIGHTS_FILENAME
+    save_file({"lora_transformer_blocks.0.attn1.to_q.lora_A.weight": torch.zeros(2, 2)},
+              str(f))
+    assert detect_lora_base(f) == "sana"
+
+
+def test_detect_lora_base_falls_back_to_name(tmp_path):
+    from backend.model_registry.scanner import detect_lora_base
+    lora_dir = tmp_path / "sdxl-lora"
+    lora_dir.mkdir()
+    f = lora_dir / LORA_WEIGHTS_FILENAME
+    f.write_bytes(b"not a safetensors file")
+    assert detect_lora_base(f) == "sdxl"
 
 
 def test_scan_local_dir_sets_correct_source(tmp_path):

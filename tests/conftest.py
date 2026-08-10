@@ -75,6 +75,7 @@ async def client(mock_pipeline, tmp_path, monkeypatch):
     monkeypatch.setattr(cfg_mod.settings, "images_dir", tmp_path / "images")
     monkeypatch.setattr(cfg_mod.settings, "thumbnails_dir", tmp_path / "images" / "thumbs")
     monkeypatch.setattr(cfg_mod.settings, "models_json", tmp_path / "models.json")
+    monkeypatch.setattr(cfg_mod.settings, "loras_dir", tmp_path / "loras")
 
     # Use a file-based SQLite in tmp_path — avoids multi-connection in-memory isolation issues
     db_path = tmp_path / "test.db"
@@ -101,7 +102,7 @@ async def client(mock_pipeline, tmp_path, monkeypatch):
     from backend.model_registry.loader import PipelineLoader
     from backend.pipeline.preview import PreviewBroadcaster
     from backend.pipeline.worker import PipelineWorker
-    from backend.api import queue, images, boards, models, websocket
+    from backend.api import queue, images, boards, models, websocket, loras
     from backend.gallery.db import init_db
     import asyncio
 
@@ -154,6 +155,7 @@ async def client(mock_pipeline, tmp_path, monkeypatch):
     test_app.include_router(images.router)
     test_app.include_router(boards.router)
     test_app.include_router(models.router)
+    test_app.include_router(loras.router)
     test_app.include_router(websocket.router)
 
     from httpx import AsyncClient, ASGITransport

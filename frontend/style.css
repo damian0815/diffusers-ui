@@ -18,6 +18,7 @@
   --accent-dim:   #4f46e5;
   --accent-glow:  rgba(129, 140, 248, 0.10);
   --accent-bg:    rgba(129, 140, 248, 0.08);
+  --accent-alt:   #f472b6;
 
   --text:         #f1f1f3;
   --text-2:       #a1a1aa;
@@ -1375,6 +1376,13 @@ select option { background: var(--surface); }
   border-radius: 4px;
   padding: 1px 6px;
   flex-shrink: 0;
+}
+
+/* LoRA scan candidate badge */
+.lora-badge {
+  color: var(--accent-alt, #f472b6);
+  background: rgba(244, 114, 182, 0.1);
+  border-color: rgba(244, 114, 182, 0.25);
 }
 
 /* Divider between discover and installed */

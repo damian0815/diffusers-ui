@@ -193,6 +193,7 @@ def _entry_to_dict(entry: ModelEntry, registry) -> dict:
         "base": entry.base,
         "source": entry.source,
         "source_type": entry.source_type,
+        "kind": entry.kind,
         "has_api_key": entry.hf_api_key is not None,
         "quantization": entry.quantization,
         "files_missing": files_missing,
