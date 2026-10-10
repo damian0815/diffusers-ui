@@ -95,6 +95,169 @@ async def test_list_queue(client):
 
 
 # ---------------------------------------------------------------------------
+# Paged / filtered listing (backend-computed)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_queue_pagination(client):
+    for _ in range(5):
+        await enqueue_one(client)
+
+    resp = await client.get("/api/v1/queue/default/?limit=2")
+    data = resp.json()
+    assert len(data["items"]) == 2
+    assert data["total"] == 5
+    assert data["has_more"] is True
+    first_ids = [i["item_id"] for i in data["items"]]
+
+    resp = await client.get("/api/v1/queue/default/?limit=2&offset=2")
+    data = resp.json()
+    assert len(data["items"]) == 2
+    assert data["has_more"] is True
+
+    resp = await client.get("/api/v1/queue/default/?limit=2&offset=4")
+    data = resp.json()
+    assert len(data["items"]) == 1
+    assert data["has_more"] is False
+
+    # Pages don't overlap.
+    all_ids = first_ids + [i["item_id"] for i in (
+        (await client.get("/api/v1/queue/default/?limit=2&offset=2")).json()["items"]
+    )]
+    assert len(set(all_ids)) == 4
+
+
+@pytest.mark.asyncio
+async def test_list_queue_metadata(client):
+    await enqueue_one(client)
+    data = (await client.get("/api/v1/queue/default/")).json()
+    for key in ("summary", "models", "total", "has_more", "priority_count"):
+        assert key in data
+    assert data["total"] == 1
+    assert data["summary"]["pending"] >= 1
+    assert "priority" in data["items"][0]
+    assert "created_at" in data["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_list_queue_status_filter(client):
+    data = await enqueue_one(client)
+    item_id = data["item_ids"][0]
+    await client.delete(f"/api/v1/queue/default/i/{item_id}")
+
+    resp = await client.get("/api/v1/queue/default/?status=cancelled")
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["status"] == "cancelled"
+
+    resp = await client.get("/api/v1/queue/default/?status=bogus,pending")
+    data = resp.json()
+    assert data["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_queue_active_state(client):
+    data = await enqueue_one(client)
+    item_id = data["item_ids"][0]
+    await client.delete(f"/api/v1/queue/default/i/{item_id}")
+
+    resp = await client.get("/api/v1/queue/default/?status=pending,processing")
+    data = resp.json()
+    assert data["total"] == 0  # the only item was cancelled
+
+
+@pytest.mark.asyncio
+async def test_list_queue_model_filter(client):
+    await enqueue_one(client, batch=dict(
+        prompt="model a prompt", model_key="model_a", board_id="test_board",
+    ))
+    await enqueue_one(client, batch=dict(
+        prompt="model b prompt", model_key="model_b", board_id="test_board",
+    ))
+
+    resp = await client.get("/api/v1/queue/default/?model=model_a")
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["model_key"] == "model_a"
+
+    # models list is unfiltered — both models present.
+    models = {m["model_key"] for m in data["models"]}
+    assert models == {"model_a", "model_b"}
+
+
+@pytest.mark.asyncio
+async def test_list_queue_search_case_insensitive(client):
+    await enqueue_one(client, batch=dict(
+        prompt="A Beautiful Landscape", model_key="test_model", board_id="test_board",
+    ))
+    await enqueue_one(client, batch=dict(
+        prompt="a grumpy city", model_key="test_model", board_id="test_board",
+    ))
+
+    resp = await client.get("/api/v1/queue/default/?q=beautiful")
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["prompt"] == "A Beautiful Landscape"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_prepend_priority_in_list(client):
+    data = await enqueue_one(client, prepend=True)
+    item_id = data["item_ids"][0]
+    resp = await client.get("/api/v1/queue/default/")
+    items = resp.json()["items"]
+    entry = next(i for i in items if i["item_id"] == item_id)
+    assert entry["priority"] is True
+    assert resp.json()["priority_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_list_sorts_priority_first(client):
+    normal = await enqueue_one(client, prepend=False)
+    prepended = await enqueue_one(client, prepend=True)
+
+    resp = await client.get("/api/v1/queue/default/")
+    items = resp.json()["items"]
+    order = [i["item_id"] for i in items]
+    prepended_id = prepended["item_ids"][0]
+    normal_id = normal["item_ids"][0]
+    assert order.index(prepended_id) < order.index(normal_id)
+    assert items[order.index(prepended_id)]["priority"] is True
+
+
+# ---------------------------------------------------------------------------
+# VAE slicing (queue-level OOM fallback)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_worker_status_includes_vae_slicing(client):
+    resp = await client.get("/api/v1/queue/default/status")
+    assert resp.status_code == 200
+    assert "vae_slicing" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_set_vae_slicing(client):
+    resp = await client.put(
+        "/api/v1/queue/default/vae_slicing", json={"vae_slicing": True}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["vae_slicing"] is True
+
+    status = await client.get("/api/v1/queue/default/status")
+    assert status.json()["vae_slicing"] is True
+
+    resp = await client.put(
+        "/api/v1/queue/default/vae_slicing", json={"vae_slicing": False}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["vae_slicing"] is False
+
+    status = await client.get("/api/v1/queue/default/status")
+    assert status.json()["vae_slicing"] is False
+
+
+# ---------------------------------------------------------------------------
 # Crop params tests
 # ---------------------------------------------------------------------------
 

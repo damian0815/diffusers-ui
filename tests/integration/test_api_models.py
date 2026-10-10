@@ -240,3 +240,99 @@ async def test_patch_quantization_on_merge_rejected(client, tmp_path):
     assert resp.status_code == 400
     assert "quantization" in resp.json()["detail"]
 
+
+# ---------------------------------------------------------------------------
+# VAE tiling (per-model)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_vae_tiling_defaults_to_false(client):
+    resp = await client.post(
+        "/api/v2/models/install?source=org/vae-default",
+        json={"name": "Vae Default", "base": "sd-1", "source_type": "hf_repo_id"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["vae_tiling"] is False
+
+
+@pytest.mark.asyncio
+async def test_install_with_vae_tiling_enabled(client):
+    resp = await client.post(
+        "/api/v2/models/install?source=org/vae-on",
+        json={"name": "Vae On", "base": "sd-1", "source_type": "hf_repo_id",
+              "vae_tiling": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["vae_tiling"] is True
+
+
+@pytest.mark.asyncio
+async def test_patch_vae_tiling(client):
+    install = await client.post(
+        "/api/v2/models/install?source=org/vae-patch",
+        json={"name": "Vae Patch", "base": "sdxl", "source_type": "hf_repo_id"},
+    )
+    key = install.json()["key"]
+
+    resp = await client.patch(f"/api/v2/models/{key}", json={"vae_tiling": True})
+    assert resp.status_code == 200
+    assert resp.json()["vae_tiling"] is True
+
+    resp = await client.patch(f"/api/v2/models/{key}", json={"vae_tiling": False})
+    assert resp.status_code == 200
+    assert resp.json()["vae_tiling"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_vae_tiling_nonexistent_returns_404(client):
+    resp = await client.patch("/api/v2/models/no-such-key", json={"vae_tiling": True})
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Compel (per-model prompt encoding)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_use_compel_defaults_to_true(client):
+    resp = await client.post(
+        "/api/v2/models/install?source=org/compel-default",
+        json={"name": "Compel Default", "base": "sana", "source_type": "hf_repo_id"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["use_compel"] is True
+
+
+@pytest.mark.asyncio
+async def test_install_with_use_compel_disabled(client):
+    resp = await client.post(
+        "/api/v2/models/install?source=org/compel-off",
+        json={"name": "Compel Off", "base": "sana", "source_type": "hf_repo_id",
+              "use_compel": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["use_compel"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_use_compel(client):
+    install = await client.post(
+        "/api/v2/models/install?source=org/compel-patch",
+        json={"name": "Compel Patch", "base": "sana", "source_type": "hf_repo_id"},
+    )
+    key = install.json()["key"]
+
+    resp = await client.patch(f"/api/v2/models/{key}", json={"use_compel": False})
+    assert resp.status_code == 200
+    assert resp.json()["use_compel"] is False
+
+    resp = await client.patch(f"/api/v2/models/{key}", json={"use_compel": True})
+    assert resp.status_code == 200
+    assert resp.json()["use_compel"] is True
+
+
+@pytest.mark.asyncio
+async def test_patch_use_compel_nonexistent_returns_404(client):
+    resp = await client.patch("/api/v2/models/no-such-key", json={"use_compel": False})
+    assert resp.status_code == 404
+

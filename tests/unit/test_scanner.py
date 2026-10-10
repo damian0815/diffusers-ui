@@ -1,6 +1,5 @@
 """Unit tests for backend/model_registry/scanner.py"""
 import json
-import pytest
 from pathlib import Path
 from backend.model_registry.scanner import (
     scan_local_dir,

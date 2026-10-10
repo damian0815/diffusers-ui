@@ -84,6 +84,99 @@ def test_register_new_generates_uuid(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# VAE tiling tests
+# ---------------------------------------------------------------------------
+
+def test_vae_tiling_defaults_to_false(registry):
+    entry = registry.add(make_entry())
+    assert entry.vae_tiling is False
+
+
+def test_register_new_sets_vae_tiling(tmp_path):
+    r = ModelRegistry(tmp_path / "m.json")
+    entry = r.register_new(name="Test", base="sana", source="a/b",
+                           source_type="hf_repo_id", vae_tiling=True)
+    assert entry.vae_tiling is True
+
+
+def test_update_vae_tiling(registry):
+    registry.add(make_entry())
+    registry.update_vae_tiling("k1", True)
+    assert registry.get("k1").vae_tiling is True
+    registry.update_vae_tiling("k1", False)
+    assert registry.get("k1").vae_tiling is False
+
+
+def test_update_vae_tiling_nonexistent_raises(registry):
+    with pytest.raises(ModelNotFoundError):
+        registry.update_vae_tiling("nope", True)
+
+
+def test_vae_tiling_persists_across_instances(tmp_path):
+    path = tmp_path / "models.json"
+    r1 = ModelRegistry(path)
+    r1.add(make_entry())
+    r1.update_vae_tiling("k1", True)
+    r2 = ModelRegistry(path)
+    assert r2.get("k1").vae_tiling is True
+
+
+# ---------------------------------------------------------------------------
+# Compel (per-model prompt encoding) tests
+# ---------------------------------------------------------------------------
+
+def test_use_compel_defaults_to_true(registry):
+    entry = registry.add(make_entry())
+    assert entry.use_compel is True
+
+
+def test_use_compel_defaults_to_true_for_legacy_entries(registry):
+    # An entry missing the key (old models.json) must load with the default ON.
+    entry = ModelEntry(**{
+        "key": "legacy", "name": "Legacy", "base": "sana",
+        "source": "org/sana", "source_type": "hf_repo_id",
+    })
+    registry.add(entry)
+    assert registry.get("legacy").use_compel is True
+
+
+def test_register_new_sets_use_compel(tmp_path):
+    r = ModelRegistry(tmp_path / "m.json")
+    entry = r.register_new(name="Test", base="sana", source="a/b",
+                           source_type="hf_repo_id", use_compel=False)
+    assert entry.use_compel is False
+
+
+def test_update_use_compel(registry):
+    registry.add(make_entry())
+    registry.update_use_compel("k1", False)
+    assert registry.get("k1").use_compel is False
+    registry.update_use_compel("k1", True)
+    assert registry.get("k1").use_compel is True
+
+
+def test_update_use_compel_nonexistent_raises(registry):
+    with pytest.raises(ModelNotFoundError):
+        registry.update_use_compel("nope", False)
+
+
+def test_use_compel_persists_across_instances(tmp_path):
+    path = tmp_path / "models.json"
+    r1 = ModelRegistry(path)
+    r1.add(make_entry())
+    r1.update_use_compel("k1", False)
+    r2 = ModelRegistry(path)
+    assert r2.get("k1").use_compel is False
+
+
+def test_add_merge_defaults_use_compel_to_true(registry):
+    registry.add(make_sana_entry("k1", "Sana A"))
+    registry.add(make_sana_entry("k2", "Sana B"))
+    merged = registry.add_merge("Blend", [("k1", 1.0), ("k2", 1.0)])
+    assert merged.use_compel is True
+
+
+# ---------------------------------------------------------------------------
 # Merge model tests
 # ---------------------------------------------------------------------------
 

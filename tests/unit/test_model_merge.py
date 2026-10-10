@@ -194,6 +194,144 @@ def test_loader_without_registry_raises(tmp_path):
         loader.load(merge_entry)
 
 
+def _make_fake_pipeline(vae=None):
+    return SimpleNamespace(
+        transformer=SimpleNamespace(load_state_dict=MagicMock()),
+        vae=vae or SimpleNamespace(),
+    )
+
+
+def _make_fake_vae():
+    return SimpleNamespace(
+        enable_tiling=MagicMock(),
+        enable_slicing=MagicMock(),
+    )
+
+
+def test_loader_enables_vae_tiling_when_requested(tmp_path, monkeypatch):
+    fake_pipeline = _make_fake_pipeline(vae=SimpleNamespace(enable_tiling=MagicMock()))
+    monkeypatch.setattr(
+        "backend.model_registry.loader._load_sana_pipeline",
+        lambda entry: fake_pipeline,
+    )
+    from backend.model_registry.registry import ModelRegistry
+    registry = ModelRegistry(tmp_path / "models.json")
+    entry = ModelEntry(key="k1", name="Sana", base="sana",
+                       source="org/sana", source_type="hf_repo_id",
+                       vae_tiling=True)
+    registry.add(entry)
+
+    loader = PipelineLoader(registry)
+    pipeline = loader.load(entry)
+    assert pipeline is fake_pipeline
+    fake_pipeline.vae.enable_tiling.assert_called_once()
+
+
+def test_loader_skips_vae_tiling_when_disabled(tmp_path, monkeypatch):
+    fake_pipeline = _make_fake_pipeline(vae=SimpleNamespace(enable_tiling=MagicMock()))
+    monkeypatch.setattr(
+        "backend.model_registry.loader._load_sana_pipeline",
+        lambda entry: fake_pipeline,
+    )
+    from backend.model_registry.registry import ModelRegistry
+    registry = ModelRegistry(tmp_path / "models.json")
+    entry = ModelEntry(key="k1", name="Sana", base="sana",
+                       source="org/sana", source_type="hf_repo_id",
+                       vae_tiling=False)
+    registry.add(entry)
+
+    loader = PipelineLoader(registry)
+    loader.load(entry)
+    fake_pipeline.vae.enable_tiling.assert_not_called()
+
+
+def test_loader_tolerates_vae_without_tiling_support(tmp_path, monkeypatch):
+    fake_pipeline = _make_fake_pipeline(vae=SimpleNamespace())
+    monkeypatch.setattr(
+        "backend.model_registry.loader._load_sana_pipeline",
+        lambda entry: fake_pipeline,
+    )
+    from backend.model_registry.registry import ModelRegistry
+    registry = ModelRegistry(tmp_path / "models.json")
+    entry = ModelEntry(key="k1", name="Sana", base="sana",
+                       source="org/sana", source_type="hf_repo_id",
+                       vae_tiling=True)
+    registry.add(entry)
+
+    loader = PipelineLoader(registry)
+    pipeline = loader.load(entry)  # should not raise
+    assert pipeline is fake_pipeline
+
+
+def test_loader_enables_vae_slicing_when_requested(tmp_path, monkeypatch):
+    fake_pipeline = _make_fake_pipeline(vae=_make_fake_vae())
+    monkeypatch.setattr(
+        "backend.model_registry.loader._load_sana_pipeline",
+        lambda entry: fake_pipeline,
+    )
+    from backend.model_registry.registry import ModelRegistry
+    registry = ModelRegistry(tmp_path / "models.json")
+    entry = ModelEntry(key="k1", name="Sana", base="sana",
+                       source="org/sana", source_type="hf_repo_id")
+    registry.add(entry)
+
+    loader = PipelineLoader(registry)
+    pipeline = loader.load(entry, vae_slicing=True)
+    assert pipeline is fake_pipeline
+    fake_pipeline.vae.enable_slicing.assert_called_once()
+    fake_pipeline.vae.enable_tiling.assert_not_called()
+
+
+def test_loader_skips_vae_slicing_when_not_requested(tmp_path, monkeypatch):
+    fake_pipeline = _make_fake_pipeline(vae=_make_fake_vae())
+    monkeypatch.setattr(
+        "backend.model_registry.loader._load_sana_pipeline",
+        lambda entry: fake_pipeline,
+    )
+    from backend.model_registry.registry import ModelRegistry
+    registry = ModelRegistry(tmp_path / "models.json")
+    entry = ModelEntry(key="k1", name="Sana", base="sana",
+                       source="org/sana", source_type="hf_repo_id")
+    registry.add(entry)
+
+    loader = PipelineLoader(registry)
+    loader.load(entry)  # vae_slicing defaults to False
+    fake_pipeline.vae.enable_slicing.assert_not_called()
+
+
+def test_loader_tolerates_vae_without_slicing_support(tmp_path, monkeypatch):
+    fake_pipeline = _make_fake_pipeline(vae=SimpleNamespace())
+    monkeypatch.setattr(
+        "backend.model_registry.loader._load_sana_pipeline",
+        lambda entry: fake_pipeline,
+    )
+    from backend.model_registry.registry import ModelRegistry
+    registry = ModelRegistry(tmp_path / "models.json")
+    entry = ModelEntry(key="k1", name="Sana", base="sana",
+                       source="org/sana", source_type="hf_repo_id")
+    registry.add(entry)
+
+    loader = PipelineLoader(registry)
+    pipeline = loader.load(entry, vae_slicing=True)  # should not raise
+    assert pipeline is fake_pipeline
+
+
+def test_loader_enable_slicing_on_loaded(monkeypatch):
+    fake_pipeline = _make_fake_pipeline(vae=_make_fake_vae())
+    monkeypatch.setattr(
+        "backend.model_registry.loader._load_sana_pipeline",
+        lambda entry: fake_pipeline,
+    )
+    from backend.model_registry.registry import ModelRegistry
+    entry = ModelEntry(key="k1", name="Sana", base="sana",
+                       source="org/sana", source_type="hf_repo_id")
+    loader = PipelineLoader(None)
+    loader._pipeline = fake_pipeline
+    loader._loaded_key = entry.key
+    loader.enable_vae_slicing_on_loaded()
+    fake_pipeline.vae.enable_slicing.assert_called_once()
+
+
 def test_bnb_8bit_cast_warning_is_suppressed():
     logger = logging.getLogger("bitsandbytes.autograd._functions")
     emitted = []
