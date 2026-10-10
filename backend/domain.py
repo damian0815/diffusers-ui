@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
@@ -125,6 +126,7 @@ class QueueItem:
     error: str | None = None
     # priority=True: item was enqueued to the front; skip batch window & run solo
     priority: bool = False
+    created_at: datetime | None = field(default_factory=datetime.utcnow)
 
 
 @dataclass
@@ -143,6 +145,8 @@ class ModelEntry:
     source_type: Literal['hf_repo_id', 'local_path']
     hf_api_key: str | None = None        # stored only if user provided one
     quantization: str | None = None      # 'int8', 'int4', or None (SANA only for now)
+    vae_tiling: bool = False             # enable VAE tiling on load (lower VRAM)
+    use_compel: bool = True    # encode prompts via Compel (weighted syntax, long prompts)
     merge: list[MergeComponent] | None = None   # present only on merge entries
     kind: str = "model"                  # 'model' or 'lora' (scan candidates only)
 

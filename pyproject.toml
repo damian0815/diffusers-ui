@@ -22,6 +22,7 @@ dependencies = [
     "python-multipart",
     "safetensors>=0.4",
     "torchvision>=0.27.1",
+    "peft>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +46,9 @@ testpaths = ["tests"]
 python_version = "3.12"
 strict = false
 ignore_missing_imports = true
+
+[tool.uv.sources]
+compel = { path = "../compel/dist/compel-2.5.0.dev1-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

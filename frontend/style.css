@@ -1165,14 +1165,13 @@ select option { background: var(--surface); }
 .queue-row {
   display: grid;
   grid-template-columns: 110px 50px 180px 1fr auto auto;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  padding: 10px 14px;
+  padding: 6px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
   transition: border-color 0.12s;
-  min-height: 44px;
 }
 .queue-row:hover { border-color: var(--border-2); }
 .queue-row.status-processing { border-left: 3px solid var(--accent); }
@@ -1223,7 +1222,7 @@ select option { background: var(--surface); }
 }
 
 .queue-model-col {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1231,21 +1230,25 @@ select option { background: var(--surface); }
 }
 
 .queue-prompt-col {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .queue-error-col { /* hidden unless error */ }
 .queue-error {
   font-size: 11px;
   color: var(--danger);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.queue-created {
+  display: block;
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 2px;
   white-space: nowrap;
 }
 
@@ -1254,6 +1257,136 @@ select option { background: var(--surface); }
   gap: 4px;
   justify-content: flex-end;
   flex-shrink: 0;
+}
+
+/* ── Queue filter bar ────────────────────────────────────── */
+.queue-filterbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  /* Negative horizontal margins pull the bar full-width over the container's
+     32px side padding; the padding keeps its children aligned with the rows. */
+  margin: -12px -32px 12px;
+  padding: 8px 32px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.queue-search {
+  width: 200px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.queue-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.queue-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--surface);
+}
+.queue-segmented button {
+  padding: 5px 14px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--text-2);
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.queue-segmented button + button {
+  border-left: 1px solid var(--border);
+}
+.queue-segmented button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.queue-status-checkboxes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.queue-status-checkboxes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.queue-status-checkboxes input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.queue-model-select {
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.queue-results {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.queue-clear-filters {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.queue-priority-divider {
+  margin: 12px 0 6px;
+  border-top: 1px dashed var(--border-2);
+  position: relative;
+}
+.queue-priority-label {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  background: var(--panel);
+  padding: 0 8px;
+}
+
+.queue-loading {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+  animation: queue-loading-pulse 1.4s ease-in-out infinite;
+}
+@keyframes queue-loading-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
 }
 
 /* ── Models full-screen layout ──────────────────────────── */
@@ -1477,6 +1610,25 @@ select option { background: var(--surface); }
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 2px;
+}
+
+/* Flexible spacer separating quant controls from the VAE tiling toggle */
+.model-row-quant-sep {
+  flex: 1;
+}
+
+/* Inline spinner shown next to the VAE tiling checkbox while the PATCH is in flight */
+.spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border: 2px solid var(--text-3);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spinner-rotate 0.7s linear infinite;
+}
+@keyframes spinner-rotate {
+  to { transform: rotate(360deg); }
 }
 
 /* Merge model row badge */

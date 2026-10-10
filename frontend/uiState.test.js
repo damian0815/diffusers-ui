@@ -107,7 +107,7 @@ describe('app _persistUiState', () => {
     expect(raw.prompt).toBe('hello world');
     expect(raw.seed).toBe(7);
     expect(raw.modelKey).toBe('m1');
-    expect(raw.hfInstall).toEqual({ repoId: 'o/r', name: 'Repo', base: 'sdxl', quantization: 'int8' });
+    expect(raw.hfInstall).toEqual({ repoId: 'o/r', name: 'Repo', base: 'sdxl', quantization: 'int8', vaeTiling: false, useCompel: true });
     expect(raw.hfInstall.apiKey).toBeUndefined();
 
     const c2 = window.app();

@@ -382,16 +382,16 @@
 
       <div id="adopt-bar" x-show="selectedImageMeta">
         <span class="adopt-label">Adopt:</span>
-        <button class="adopt-btn" @click="adoptSettings('positive')" title="P">Positive</button>
-        <button class="adopt-btn" @click="adoptSettings('negative')" title="N">Negative</button>
-        <button class="adopt-btn" @click="adoptSettings('size')"   title="D">Size</button>
-        <button class="adopt-btn" @click="adoptSettings('model')"  title="">Model</button>
-        <button class="adopt-btn" @click="adoptSettings('seed')"   title="S">Seed</button>
-        <button class="adopt-btn" @click="adoptSettings('steps')"  title="">Steps</button>
-        <button class="adopt-btn" @click="adoptSettings('loras')"  title="">LoRAs</button>
-        <button class="adopt-btn" @click="adoptSettings('all')"    title="A">All</button>
+        <button class="adopt-btn" @click="adoptSettings('positive')" title="Positive · P">💬➕ Positive</button>
+        <button class="adopt-btn" @click="adoptSettings('negative')" title="Negative · N">💬➖ Negative</button>
+        <button class="adopt-btn" @click="adoptSettings('size')"   title="Size · D">⤢ Size</button>
+        <button class="adopt-btn" @click="adoptSettings('model')"  title="Model · M">🗄️ Model</button>
+        <button class="adopt-btn" @click="adoptSettings('seed')"   title="Seed · S">🌳 Seed</button>
+        <button class="adopt-btn" @click="adoptSettings('steps')"  title="Steps · R">🔢 Steps</button>
+        <button class="adopt-btn" @click="adoptSettings('loras')"  title="LoRAs · L">🧩 LoRAs</button>
+        <button class="adopt-btn" @click="adoptSettings('all')"    title="All · A">💥 All</button>
         <button class="icon-btn star-btn" @click="toggleStar()"
-                :title="selectedImageMeta?.starred ? 'Unstar' : 'Star'">
+                :title="selectedImageMeta?.starred ? 'Unstar  ·  F' : 'Star  ·  F'">
           <span x-text="selectedImageMeta?.starred ? '⭐' : '☆'"></span>
         </button>
       </div>
@@ -793,16 +793,16 @@
     <div class="fs-header">
       <div class="fs-header-left">
         <h1 class="fs-title">Queue</h1>
-        <div class="fs-stats" x-show="queueDetails.length > 0">
+        <div class="fs-stats" x-show="queueTotal > 0">
           <span class="stat-pill pending"
-                x-text="`${queueDetails.filter(i=>i.status==='pending').length} pending`"></span>
+                x-text="`${queueSummary.pending ?? 0} pending`"></span>
           <span class="stat-pill processing"
-                x-text="`${queueDetails.filter(i=>i.status==='processing').length} processing`"></span>
+                x-text="`${queueSummary.processing ?? 0} processing`"></span>
           <span class="stat-pill done"
-                x-text="`${queueDetails.filter(i=>i.status==='completed').length} done`"></span>
+                x-text="`${queueSummary.completed ?? 0} done`"></span>
           <span class="stat-pill failed"
-                x-show="queueDetails.filter(i=>i.status==='failed').length > 0"
-                x-text="`${queueDetails.filter(i=>i.status==='failed').length} failed`"></span>
+                x-show="(queueSummary.failed ?? 0) > 0"
+                x-text="`${queueSummary.failed ?? 0} failed`"></span>
         </div>
         <span class="fs-subtitle loaded-model-label"
               x-show="loadedModelKey"
@@ -813,9 +813,9 @@
               x-text="`VRAM: ${(vramUsed / 1e9).toFixed(1)} / ${(vramTotal / 1e9).toFixed(1)} GB`"
               title="Device memory usage"></span>
         <span class="stat-pill eta"
-              x-show="imagesPerSec > 0 && queueDetails.filter(i=>i.status==='pending').length > 0"
+              x-show="imagesPerSec > 0 && (queueSummary.pending ?? 0) > 0"
               x-text="`ETA: ${(() => {
-                const pending = queueDetails.filter(i=>i.status==='pending').length;
+                const pending = queueSummary.pending ?? 0;
                 const secs = Math.round(pending / imagesPerSec);
                 if (secs < 60) return `${secs}s`;
                 if (secs < 3600) return `${Math.floor(secs/60)}m ${secs%60}s`;
@@ -844,6 +844,14 @@
                  @blur="submitBatchSize()"
                  style="width:44px;text-align:center">
         </label>
+        <label class="checkbox-label" style="white-space:nowrap"
+               title="Split VAE decode across the batch dimension to reduce VRAM (force-enabled automatically after a batch OOM)">
+          <input type="checkbox"
+                 :checked="vaeSlicing"
+                 :disabled="vaeSlicingPending"
+                 @change="setVaeSlicing($event.target.checked)">
+          <span>VAE Slice</span>
+        </label>
         <button class="btn-secondary" @click="loadQueueDetails()" title="Refresh">↻ Refresh</button>
         <button class="btn-secondary" @click="pruneQueue()" title="Remove completed/failed rows">Prune done</button>
         <button class="btn-secondary danger" @click="clearQueue()" title="Cancel all pending">Clear pending</button>
@@ -863,7 +871,38 @@
       </div>
     </div>
 
-    <div class="fs-body">
+    <div class="fs-body" x-ref="queueBody">
+      <div class="queue-filterbar">
+        <input class="queue-search" type="search" placeholder="Search prompts…"
+               x-model="queueSearchDraft"
+               @input.debounce.300ms="updateQueueFilters()">
+        <div class="queue-segmented">
+          <button :class="{active: _queueFilters.state === 'all'}"
+                  @click="setQueueState('all')">All</button>
+          <button :class="{active: _queueFilters.state === 'active'}"
+                  @click="setQueueState('active')">Active</button>
+          <button :class="{active: _queueFilters.state === 'done'}"
+                  @click="setQueueState('done')">Done</button>
+        </div>
+        <div class="queue-status-checkboxes">
+          <label><input type="checkbox" value="pending" x-model="_queueFilters.status" @change="updateQueueFilters()"> pending</label>
+          <label><input type="checkbox" value="processing" x-model="_queueFilters.status" @change="updateQueueFilters()"> processing</label>
+          <label><input type="checkbox" value="completed" x-model="_queueFilters.status" @change="updateQueueFilters()"> completed</label>
+          <label><input type="checkbox" value="failed" x-model="_queueFilters.status" @change="updateQueueFilters()"> failed</label>
+          <label><input type="checkbox" value="cancelled" x-model="_queueFilters.status" @change="updateQueueFilters()"> cancelled</label>
+        </div>
+        <select class="queue-model-select" x-model="_queueFilters.model" @change="updateQueueFilters()">
+          <option value="">All models</option>
+          <template x-for="m in queueModels" :key="m.model_key">
+            <option :value="m.model_key" x-text="`${m.model_name} (${m.count})`"></option>
+          </template>
+        </select>
+        <span class="queue-results" x-text="`${queueTotal} result${queueTotal === 1 ? '' : 's'}`"></span>
+        <a class="queue-clear-filters"
+           @click.prevent="resetQueueFilters()"
+           x-show="queueSearchDraft || _queueFilters.model || _queueFilters.status.length > 0 || _queueFilters.state !== 'all'">Clear filters</a>
+      </div>
+
       <div x-show="queueDetails.length === 0" class="fs-empty">
         <div class="placeholder-inner">
           <div class="placeholder-icon">⏳</div>
@@ -873,48 +912,56 @@
       </div>
 
       <div x-show="queueDetails.length > 0" class="queue-list">
-        <template x-for="item in queueDetails" :key="item.item_id">
-          <div class="queue-row" :class="`status-${item.status}`"
-               x-transition:enter="row-enter"
-               x-transition:enter-start="row-enter-start"
-               x-transition:enter-end="row-enter-end">
-            <div class="queue-status-col">
-              <span class="status-dot" :class="item.status"></span>
-              <span class="status-label" x-text="item.status"></span>
+        <template x-for="(item, idx) in queueDetails" :key="item.item_id">
+          <div>
+            <div x-show="isLastPriorityRow(idx)" class="queue-priority-divider">
+              <span class="queue-priority-label">Prepend</span>
             </div>
-            <div class="queue-id-col">
-              <span class="queue-id" x-text="`#${item.item_id}`"></span>
-            </div>
-            <div class="queue-model-col">
-              <span x-text="models.find(m => m.key === item.model_key)?.name || item.model_key || '—'"></span>
-            </div>
-            <div class="queue-prompt-col">
-              <span x-text="item.prompt || '—'"></span>
-            </div>
-            <div class="queue-error-col" x-show="item.error">
-              <span class="queue-error" x-text="item.error"></span>
-            </div>
-            <div class="queue-actions-col">
-              <button x-show="item.status === 'completed' && item.output_image_name"
-                      class="icon-btn sm"
-                      @click="viewQueueImage(item.output_image_name)"
-                      title="View image">🖼</button>
-              <button x-show="item.status === 'pending'"
-                      class="icon-btn sm"
-                      @click="moveToFront(item.item_id)"
-                      title="Move to front of queue">⏫</button>
-              <button x-show="item.status === 'pending'"
-                      class="icon-btn sm danger"
-                      @click="cancelQueueItem(item.item_id)"
-                      title="Cancel">✕</button>
-              <button x-show="['failed','cancelled','completed'].includes(item.status)"
-                      class="icon-btn sm"
-                      @click="resubmitItem(item.item_id)"
-                      title="Resubmit">↻</button>
+            <div class="queue-row" :class="`status-${item.status}`"
+                 x-transition:enter="row-enter"
+                 x-transition:enter-start="row-enter-start"
+                 x-transition:enter-end="row-enter-end">
+              <div class="queue-status-col">
+                <span class="status-dot" :class="item.status"></span>
+                <span class="status-label" x-text="item.status"></span>
+              </div>
+              <div class="queue-id-col">
+                <span class="queue-id" x-text="`#${item.item_id}`"></span>
+                <span class="queue-created" x-show="item.created_at" x-text="timeAgo(item.created_at)"></span>
+              </div>
+              <div class="queue-model-col">
+                <span x-text="models.find(m => m.key === item.model_key)?.name || item.model_key || '—'"></span>
+              </div>
+              <div class="queue-prompt-col">
+                <span x-text="item.prompt || '—'"></span>
+              </div>
+              <div class="queue-error-col" x-show="item.error">
+                <span class="queue-error" x-text="item.error"></span>
+              </div>
+              <div class="queue-actions-col">
+                <button x-show="item.status === 'completed' && item.output_image_name"
+                        class="icon-btn sm"
+                        @click="viewQueueImage(item.output_image_name)"
+                        title="View image">🖼</button>
+                <button x-show="item.status === 'pending'"
+                        class="icon-btn sm"
+                        @click="moveToFront(item.item_id)"
+                        title="Move to front of queue">⏫</button>
+                <button x-show="item.status === 'pending'"
+                        class="icon-btn sm danger"
+                        @click="cancelQueueItem(item.item_id)"
+                        title="Cancel">✕</button>
+                <button x-show="['failed','cancelled','completed'].includes(item.status)"
+                        class="icon-btn sm"
+                        @click="resubmitItem(item.item_id)"
+                        title="Resubmit">↻</button>
+              </div>
             </div>
           </div>
         </template>
       </div>
+
+      <div x-show="_queueLoading" class="queue-loading">Loading…</div>
     </div>
 
   </div><!-- /#queue-view -->
@@ -1235,6 +1282,17 @@
                 <option value="int4">INT4</option>
               </select>
             </div>
+            <div class="field" style="flex:1;justify-content:flex-end">
+              <label class="field-label">VAE Tiling</label>
+              <label class="checkbox-label">
+                <input type="checkbox" x-model="hfInstall.vaeTiling" :disabled="hfInstall.pending">
+                <span>Enabled</span>
+              </label>
+              <label class="checkbox-label" title="Encode prompts with Compel (weighted syntax)">
+                <input type="checkbox" x-model="hfInstall.useCompel" :disabled="hfInstall.pending">
+                <span>Compel</span>
+              </label>
+            </div>
           </div>
           <div class="hf-install-row hf-install-footer">
             <input type="password" x-model="hfInstall.apiKey"
@@ -1353,11 +1411,35 @@
                     title="Model will be reloaded with new quantization on next generation">
                 (applied on next load)
               </span>
+              <span class="model-row-quant-sep"></span>
+              <label class="checkbox-label" title="Decode latents in tiles to reduce VRAM (applied on next load)">
+                <input type="checkbox"
+                       :checked="!!m.vae_tiling"
+                       :disabled="vaeTilingPendingKey === m.key"
+                       @change="setModelVaeTiling(m.key, $event.target.checked)">
+                <span>VAE Tiling</span>
+              </label>
+              <span class="spinner" x-show="vaeTilingPendingKey === m.key" aria-label="Saving"></span>
+              <label class="checkbox-label" title="Encode prompts with Compel (weighted syntax)">
+                <input type="checkbox" :checked="!!m.use_compel"
+                       :disabled="useCompelPendingKey === m.key"
+                       @change="setModelUseCompel(m.key, $event.target.checked)">
+                <span>Compel</span>
+              </label>
+              <span class="spinner" x-show="useCompelPendingKey === m.key" aria-label="Saving"></span>
             </div>
             <div class="model-row-quant" x-show="m.merge">
               <span class="hint" style="margin:0;font-size:11px">
                 Merged model — quantization not applicable
               </span>
+              <span class="model-row-quant-sep"></span>
+              <label class="checkbox-label" title="Encode prompts with Compel (weighted syntax)">
+                <input type="checkbox" :checked="!!m.use_compel"
+                       :disabled="useCompelPendingKey === m.key"
+                       @change="setModelUseCompel(m.key, $event.target.checked)">
+                <span>Compel</span>
+              </label>
+              <span class="spinner" x-show="useCompelPendingKey === m.key" aria-label="Saving"></span>
             </div>
           </div>
         </template>

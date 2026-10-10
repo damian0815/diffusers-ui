@@ -90,7 +90,7 @@ async def client(mock_pipeline, tmp_path, monkeypatch):
     # Patch pipeline loader so no real model is loaded
     monkeypatch.setattr(
         "backend.model_registry.loader.PipelineLoader.load",
-        lambda self, entry: mock_pipeline,
+        lambda self, entry, vae_slicing=False: mock_pipeline,
     )
 
     # Build a fresh FastAPI app (bypasses module-level singletons)
@@ -150,6 +150,8 @@ async def client(mock_pipeline, tmp_path, monkeypatch):
     test_app.state.queue = _queue
     test_app.state.registry = _registry
     test_app.state.broadcaster = _broadcaster
+    test_app.state.worker = _worker
+    test_app.state.loader = _loader
 
     test_app.include_router(queue.router)
     test_app.include_router(images.router)

@@ -180,6 +180,7 @@ class MemoryAdvisor:
         self._gen_count_at_current_batch_size: int = 0  # consecutive successes at this probe
         self._max_batch_size_is_known: bool = False  # True after first OOM; switches to slow ramp-up
         self._max_batch_size_override: int = 0  # 0 = no override; >0 caps probe
+        self._vae_slicing: bool = False  # force VAE slicing on the batch dimension
         self._best_k: int = 1             # current best scaling exponent
         self._best_a: float = 0.0         # coefficient for best model
 
@@ -193,6 +194,7 @@ class MemoryAdvisor:
                 {
                     "max_batch_size_override": self._max_batch_size_override,
                     "probe_batch_size": self._probe_batch_size,
+                    "vae_slicing": self._vae_slicing,
                 }
             )
         )
@@ -204,10 +206,12 @@ class MemoryAdvisor:
             data = json.loads(path.read_text())
             self._max_batch_size_override = max(0, int(data["max_batch_size_override"]))
             self._probe_batch_size = max(1, int(data["probe_batch_size"]))
+            self._vae_slicing = bool(data.get("vae_slicing", False))
             logger.info(
-                "Loaded batch-size state: override=%d probe=%d",
+                "Loaded batch-size state: override=%d probe=%d vae_slicing=%s",
                 self._max_batch_size_override,
                 self._probe_batch_size,
+                self._vae_slicing,
             )
         except FileNotFoundError:
             pass
@@ -256,6 +260,15 @@ class MemoryAdvisor:
     @max_batch_size_override.setter
     def max_batch_size_override(self, value: int) -> None:
         self._max_batch_size_override = max(0, value)
+
+    @property
+    def vae_slicing(self) -> bool:
+        """Whether VAE slicing is forced on (batch-dimension decode split)."""
+        return self._vae_slicing
+
+    @vae_slicing.setter
+    def vae_slicing(self, enabled: bool) -> None:
+        self._vae_slicing = bool(enabled)
 
     def record_success(
         self,

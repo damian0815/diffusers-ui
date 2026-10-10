@@ -65,6 +65,8 @@ def _apply_inline_migrations(conn) -> None:
         if "lora_keys" not in existing:
             conn.execute(text("ALTER TABLE queue_items ADD COLUMN lora_keys TEXT"))
             conn.execute(text("ALTER TABLE queue_items ADD COLUMN lora_strengths TEXT"))
+        if "priority" not in existing:
+            conn.execute(text("ALTER TABLE queue_items ADD COLUMN priority BOOLEAN NOT NULL DEFAULT 0"))
 
 
 async def init_db() -> None:

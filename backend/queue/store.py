@@ -49,6 +49,7 @@ class QueueStore:
                     prediction_type=item.params.prediction_type,
                     output_image_name=item.output_image_name,
                     error=item.error,
+                    priority=item.priority,
                     lora_keys=json.dumps(item.params.lora_keys) if item.params.lora_keys else None,
                     lora_strengths=json.dumps(item.params.lora_strengths) if item.params.lora_strengths else None,
                     created_at=now,
@@ -59,6 +60,7 @@ class QueueStore:
                 row.status = item.status.value
                 row.output_image_name = item.output_image_name
                 row.error = item.error
+                row.priority = item.priority
                 row.updated_at = now
 
             await session.commit()
@@ -120,4 +122,6 @@ def _row_to_domain(row: PersistedQueueItem) -> QueueItem:
         status=ItemStatus(row.status),
         output_image_name=row.output_image_name,
         error=row.error,
+        priority=bool(row.priority),
+        created_at=row.created_at,
     )

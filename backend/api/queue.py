@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ValidationError
 
-from backend.domain import ImageGenerationParams, QueueItem
+from backend.domain import ImageGenerationParams, ItemStatus, QueueItem
 from backend.config import settings
 from backend.pipeline.mem_stats import _current_bytes, _total_bytes
 logger = logging.getLogger(__name__)
@@ -363,6 +363,7 @@ async def worker_status(queue_id: str, request: Request):
         "paused": worker.is_paused,
         "max_batch_size": worker.max_batch_size,
         "probe_batch_size": worker._mem_advisor._probe_batch_size,
+        "vae_slicing": worker.vae_slicing,
         "vram_used": _current_bytes(settings.device),
         "vram_total": _total_bytes(settings.device),
         "images_per_sec": worker.images_per_sec,
@@ -398,6 +399,15 @@ async def set_max_batch_size(queue_id: str, request: Request, body: dict = Body(
     return {"queue_id": queue_id, "max_batch_size": n}
 
 
+@router.put("/vae_slicing")
+async def set_vae_slicing(queue_id: str, request: Request, body: dict = Body(...)):
+    """Set the queue-level VAE slicing flag (force-enabled on batch OOM)."""
+    worker = request.app.state.worker
+    enabled = bool(body.get("vae_slicing", False))
+    worker.set_vae_slicing(enabled)
+    return {"queue_id": queue_id, "vae_slicing": enabled}
+
+
 @router.put("/prune")
 async def prune_queue(queue_id: str, request: Request):
     """Remove completed/failed/cancelled items from tracking."""
@@ -407,23 +417,75 @@ async def prune_queue(queue_id: str, request: Request):
 
 
 @router.get("/")
-async def list_queue(queue_id: str, request: Request):
-    """List all tracked queue items."""
+async def list_queue(
+    queue_id: str,
+    request: Request,
+    status: str = "",
+    model: str = "",
+    q: str = "",
+    offset: int = 0,
+    limit: int = 100,
+):
+    """List tracked queue items with backend-computed filters and paging.
+
+    Query params (all optional):
+    - status: comma-separated ItemStatus values, e.g. "pending,processing".
+      Unknown values are ignored (no 422).
+    - model: exact model_key match.
+    - q: case-insensitive substring on the prompt.
+    - offset / limit: paging (limit 0 returns metadata only; capped at 500).
+
+    ``summary`` and ``models`` are unfiltered (whole queue) so header pills
+    and the model dropdown stay stable; ``total`` / ``priority_count`` are
+    filtered counts.
+    """
+    from backend.queue.listing import (
+        filter_items,
+        list_models,
+        paginate,
+        priority_count,
+        sort_queue,
+        summarize,
+    )
+
     queue = request.app.state.queue
+    registry = request.app.state.registry
+
     items = queue.all_items()
+    summary = summarize(items)
+    models = list_models(items, registry)
+
+    valid_statuses = {s.value for s in ItemStatus}
+    statuses = {
+        s.strip()
+        for s in status.split(",")
+        if s.strip() and s.strip() in valid_statuses
+    } or None
+    model_key = model or None
+    query = q or None
+
+    filtered = filter_items(items, statuses=statuses, model_key=model_key, q=query)
+    total = len(filtered)
+    count_priority = priority_count(filtered)
+    ordered = sort_queue(filtered)
+    limit = min(max(limit, 0), 500)
+    page, has_more = paginate(ordered, offset, limit)
+
+    serialized = []
+    for item in page:
+        entry = registry.get(item.params.model_key)
+        serialized.append(_queue_item_to_image_dict(item, entry.name if entry else None))
+
     return {
         "queue_id": queue_id,
-        "items": [
-            {
-                "item_id": item.item_id,
-                "status": item.status.value,
-                "output_image_name": item.output_image_name,
-                "error": item.error,
-                "prompt": item.params.prompt,
-                "model_key": item.params.model_key,
-            }
-            for item in items
-        ],
+        "items": serialized,
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+        "priority_count": count_priority,
+        "has_more": has_more,
+        "summary": summary,
+        "models": models,
     }
 
 
@@ -504,6 +566,7 @@ def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
         "starred": False,
         "request_serial_number": None,
         "gen_seq": None,  # legacy alias
-        "created_at": None,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "priority": item.priority,
         "tags": [],
     }

@@ -1,5 +1,5 @@
 """
-Compel-based prompt encoding for SD 1.x and SDXL pipelines.
+Compel-based prompt encoding for SD 1.x / 2.x, SDXL and SANA pipelines.
 
 Compel (https://github.com/damian0815/compel) enables:
   - Weighted prompt syntax: (term:1.5), (term:0.8), (term--)
@@ -13,6 +13,10 @@ Usage (SD 1.x):
 
 Usage (SDXL):
     kwargs = build_prompt_embeds(pipeline, prompts, neg_prompts, is_sdxl=True)
+    pipeline(**kwargs, width=..., ...)
+
+Usage (SANA):
+    kwargs = build_sana_prompt_embeds(pipeline, prompts, neg_prompts)
     pipeline(**kwargs, width=..., ...)
 """
 from __future__ import annotations
@@ -110,6 +114,46 @@ def build_prompt_embeds(
             "prompt_embeds": pos_embeds,
             "negative_prompt_embeds": neg_embeds,
         }
+
+
+def build_sana_prompt_embeds(
+    pipeline,
+    prompts: list[str],
+    neg_prompts: list[str],
+) -> dict:
+    """
+    Encode *prompts* and *neg_prompts* for a SANA pipeline using
+    ``CompelForSana`` (which supports Gemma, SANA's text encoder).
+
+    ``CompelForSana`` returns a ``LabelledConditioning`` whose
+    ``attention_mask`` / ``negative_attention_mask`` map to the SanaPipeline
+    kwargs *prompt_attention_mask* / *negative_prompt_attention_mask* (note
+    the ``prompt_`` prefix).
+
+    ``prompt`` / ``negative_prompt`` are forwarded as ``None`` so the
+    pre-computed embeddings path is used: ``SanaPAGPipeline.__call__`` defaults
+    ``negative_prompt`` to ``""`` (not ``None``) and would otherwise trip its
+    "cannot forward both negative_prompt and negative_prompt_embeds" guard.
+
+    Args:
+        pipeline:    a loaded ``SanaPipeline`` (or ``SanaPAGPipeline``).
+        prompts:     positive prompt strings, one per batch item.
+        neg_prompts: negative prompt strings, same length as *prompts*.
+
+    Returns:
+        dict of pipeline keyword arguments.
+    """
+    from compel import CompelForSana
+
+    cond = CompelForSana(pipeline)(prompts, negative_prompt=neg_prompts)
+    return {
+        "prompt": None,
+        "negative_prompt": None,
+        "prompt_embeds": cond.embeds,
+        "negative_prompt_embeds": cond.negative_embeds,
+        "prompt_attention_mask": cond.attention_mask,
+        "negative_prompt_attention_mask": cond.negative_attention_mask,
+    }
 
 
 # ---------------------------------------------------------------------------

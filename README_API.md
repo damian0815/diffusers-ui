@@ -478,6 +478,8 @@ List all registered models.
       "source_type": "hf_repo_id",
       "has_api_key": false,
       "quantization": null,
+      "vae_tiling": false,
+      "use_compel": true,
       "files_missing": false,
       "merge": null
     }
@@ -506,25 +508,30 @@ Register a new model.
   "base": "sd-1",
   "source_type": "hf_repo_id",
   "hf_api_key": null,
-  "quantization": null
+  "quantization": null,
+  "vae_tiling": false,
+  "use_compel": true
 }
 ```
 
 `source_type`: `hf_repo_id` (default) or `local_path`  
 `base`: `sd-1`, `sd-2`, `sdxl`, `sana`  
-`quantization`: `int8`, `int4`, or `null`
+`quantization`: `int8`, `int4`, or `null`  
+`vae_tiling`: enable VAE tiling on load (lower VRAM)  
+`use_compel`: encode prompts via Compel (default `true`; supports weighted syntax and long prompts)
 
 **Response** Single model entry dict.
 
 ### `PATCH /{key}`
 
-Update a model's name and/or quantization.
+Update a model's name, quantization and/or prompt-encoding settings.
 
 **Body** (all fields optional)
 ```json
-{ "name": "New Name", "quantization": "int8" }
+{ "name": "New Name", "quantization": "int8", "use_compel": false }
 ```
-Send `"quantization": ""` to clear quantization.
+Send `"quantization": ""` to clear quantization.  
+`use_compel`: `true`/`false` — toggles Compel prompt encoding for the model.
 
 **Response** Updated model entry dict.
 

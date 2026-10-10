@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
 
 from backend.gallery.db import Base
 
@@ -36,6 +36,8 @@ class PersistedQueueItem(Base):
 
     output_image_name = Column(String, nullable=True)
     error = Column(String, nullable=True)
+
+    priority = Column(Boolean, nullable=False, default=False)
 
     # LoRA metadata (JSON-encoded lists for backward compat)
     lora_keys = Column(String, nullable=True)       # JSON-encoded list of filenames

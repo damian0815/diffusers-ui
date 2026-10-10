@@ -55,6 +55,8 @@ class ModelRegistry:
         source_type: str,
         hf_api_key: str | None = None,
         quantization: str | None = None,
+        vae_tiling: bool = False,
+        use_compel: bool = True,
     ) -> ModelEntry:
         """Create a new entry with a generated UUID key and register it."""
         entry = ModelEntry(
@@ -65,6 +67,8 @@ class ModelRegistry:
             source_type=source_type,  # type: ignore[arg-type]
             hf_api_key=hf_api_key,
             quantization=quantization,
+            vae_tiling=vae_tiling,
+            use_compel=use_compel,
         )
         return self.add(entry)
 
@@ -83,6 +87,24 @@ class ModelRegistry:
         if entry is None:
             raise ModelNotFoundError(f"No model with key {key!r}")
         entry.quantization = quantization
+        self._save()
+        return entry
+
+    def update_vae_tiling(self, key: str, enabled: bool) -> ModelEntry:
+        """Enable or disable VAE tiling for a registered model."""
+        entry = self._entries.get(key)
+        if entry is None:
+            raise ModelNotFoundError(f"No model with key {key!r}")
+        entry.vae_tiling = bool(enabled)
+        self._save()
+        return entry
+
+    def update_use_compel(self, key: str, enabled: bool) -> ModelEntry:
+        """Enable or disable Compel prompt encoding for a registered model."""
+        entry = self._entries.get(key)
+        if entry is None:
+            raise ModelNotFoundError(f"No model with key {key!r}")
+        entry.use_compel = bool(enabled)
         self._save()
         return entry
 
@@ -130,6 +152,7 @@ class ModelRegistry:
             source_type=first.source_type,
             hf_api_key=first.hf_api_key,
             quantization=None,
+            use_compel=True,
             merge=[MergeComponent(key=comp.key, weight=weight) for comp, weight in zip(resolved, (w for _, w in components))],
         )
         return self.add(entry)

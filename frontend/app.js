@@ -38,6 +38,8 @@ function app() {
     isPaused: false,           // true when worker is paused (won't start new batches)
     maxBatchSize: 0,           // user-set cap on batch size (0 = auto)
     probeBatchSize: 0,         // current probe value from the memory advisor
+    vaeSlicing: false,         // queue-level VAE slicing flag (OOM fallback)
+    vaeSlicingPending: false,  // true while the VAE slicing toggle is saving
     editingBatchSize: false,   // true while the inline batch-size input is shown
     editBatchVal: 0,           // working value during editing
     vramUsed: 0,               // current device memory allocated (bytes)
@@ -50,6 +52,15 @@ function app() {
     _currentBoardId: null,     // board_id of the currently-selected gallery (set by board-changed event)
     queueItems: [],
     queueDetails: [],
+    queueSummary: {},            // unfiltered per-status counts from the API
+    queueModels: [],             // unfiltered distinct models (drives the model <select>)
+    queueTotal: 0,               // filtered count of the current query
+    queuePriorityCount: 0,       // filtered count of prepended (priority) items
+    queueHasMore: false,
+    _queuePage: 0,
+    _queueLoading: false,
+    _queueFilters: { state: 'all', status: [], model: '', q: '' },
+    queueSearchDraft: '',
     _queueTimer: null,
     errorMessage: null,
     _errorExpanded: false,     // true when the nav-error toast is expanded to show the full message
@@ -65,10 +76,14 @@ function app() {
       base: 'sd-1',
       apiKey: '',
       quantization: '',
+      vaeTiling: false,
+      useCompel: true,
       pending: false,
     },
     modelEditingKey: null,
     modelEditName: '',
+    vaeTilingPendingKey: null,
+    useCompelPendingKey: null,
     autoSelectLatest: true,
     mergeModal: { open: false, name: '', components: [], pending: false },
     // components: [{ key, name, selected: false, weight: 1.0, warning: null }, ...]
@@ -208,12 +223,26 @@ function app() {
             this.isGenerating = true;
             this._pollItem(id); // safety-net timeout only
           }
+          // Live-append a brand-new row when the tail of the list is loaded
+          // and the item matches the current filters.
+          if (!this.queueHasMore && !this.queueDetails.some(i => i.item_id === id)
+              && this.rowMatchesFilters(data)) {
+            this.queueDetails = [...this.queueDetails, data];
+            this.queueTotal += 1;
+            if (data.priority) this.queuePriorityCount += 1;
+          }
         } else if (event === 'queue_item_completed') {
           this._onItemCompleted(data.item_id, data.image_name);
+          const row = this.queueDetails.find(i => i.item_id === data.item_id);
+          if (row) { row.status = 'completed'; row.output_image_name = data.image_name; }
         } else if (event === 'queue_item_failed') {
           this._onItemFailed(data.item_id, data.error);
+          const row = this.queueDetails.find(i => i.item_id === data.item_id);
+          if (row) { row.status = 'failed'; row.error = data.error; }
         } else if (event === 'queue_item_cancelled') {
           this._onItemFinished(data.item_id);
+          const row = this.queueDetails.find(i => i.item_id === data.item_id);
+          if (row) row.status = 'cancelled';
         } else if (event === 'worker_paused') {
           this.isPaused = true;
         } else if (event === 'worker_resumed') {
@@ -295,6 +324,8 @@ function app() {
         if (typeof saved.hfInstall.name === 'string')          this.hfInstall.name = saved.hfInstall.name;
         if (typeof saved.hfInstall.base === 'string')          this.hfInstall.base = saved.hfInstall.base;
         if (typeof saved.hfInstall.quantization === 'string')  this.hfInstall.quantization = saved.hfInstall.quantization;
+        if (typeof saved.hfInstall.vaeTiling === 'boolean')     this.hfInstall.vaeTiling = saved.hfInstall.vaeTiling;
+        if (typeof saved.hfInstall.useCompel === 'boolean')     this.hfInstall.useCompel = saved.hfInstall.useCompel;
         this.hfInstall._nameAutoFilled = false;
       }
 
@@ -321,6 +352,8 @@ function app() {
           name: this.hfInstall.name,
           base: this.hfInstall.base,
           quantization: this.hfInstall.quantization,
+          vaeTiling: this.hfInstall.vaeTiling,
+          useCompel: this.hfInstall.useCompel,
         },
       };
       if (flush) Persist.flush(UI_STATE_KEY, state);
@@ -352,12 +385,27 @@ function app() {
     _handleTabChange(tab) {
       clearInterval(this._queueTimer);
       this._queueTimer = null;
+      this._detachQueueScroll();
       if (tab === 'queue') {
         this.loadQueueDetails();
+        this.$nextTick(() => this._attachQueueScroll());
         this._queueTimer = setInterval(() => {
-          if (this.activeTab === 'queue') this.loadQueueDetails();
+          if (this.activeTab === 'queue') this.loadQueuePage({ mode: 'reconcile' });
         }, 2000);
       }
+    },
+
+    _attachQueueScroll() {
+      if (!this.$refs.queueBody || this._onQueueScroll) return;
+      this._onQueueScroll = () => this.onQueueScroll();
+      this.$refs.queueBody.addEventListener('scroll', this._onQueueScroll);
+    },
+
+    _detachQueueScroll() {
+      if (this.$refs.queueBody && this._onQueueScroll) {
+        this.$refs.queueBody.removeEventListener('scroll', this._onQueueScroll);
+      }
+      this._onQueueScroll = null;
     },
 
     // ----------------------------------------------------------------
@@ -370,7 +418,7 @@ function app() {
     // even when the client connects (or reconnects) after jobs were enqueued.
     async _reconcileQueue() {
       try {
-        const resp = await fetch('/api/v1/queue/default/');
+        const resp = await fetch('/api/v1/queue/default/?status=pending,processing&limit=1000');
         if (!resp.ok) return;
         const data = await resp.json();
         const active = (data.items || []).filter(
@@ -1067,7 +1115,7 @@ function app() {
     // ----------------------------------------------------------------
 
     async clearQueue() {
-      try { await fetch('/api/v1/queue/default/clear', { method: 'PUT' }); this.queueItems = []; await this.loadQueueDetails(); }
+      try { await fetch('/api/v1/queue/default/clear', { method: 'PUT' }); this.queueItems = []; await this.loadQueuePage({ mode: 'reset' }); }
       catch (e) { this._setError('Could not clear queue.'); }
     },
 
@@ -1098,6 +1146,7 @@ function app() {
         this.maxBatchSize = data.max_batch_size;
         this.editBatchVal = this.maxBatchSize;
         this.probeBatchSize = data.probe_batch_size ?? 0;
+        this.vaeSlicing = data.vae_slicing ?? false;
         this.vramUsed = data.vram_used ?? 0;
         this.vramTotal = data.vram_total ?? 0;
         this.imagesPerSec = data.images_per_sec ?? 0;
@@ -1138,13 +1187,155 @@ function app() {
       } catch (e) { this._setError('Could not set max batch size.'); }
     },
 
-    async loadQueueDetails() {
+    async setVaeSlicing(enabled) {
+      this.vaeSlicing = !!enabled;       // optimistic update
+      this.vaeSlicingPending = true;
       try {
-        const resp = await fetch('/api/v1/queue/default/');
+        const resp = await fetch('/api/v1/queue/default/vae_slicing', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vae_slicing: this.vaeSlicing }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+      } catch (e) {
+        this._setError(`Could not update VAE slicing: ${e.message}`);
+        this.loadWorkerStatus();  // revert to server truth
+      } finally {
+        this.vaeSlicingPending = false;
+      }
+    },
+
+    // Serialise the current filters to a query string. mode:
+    //   'reset'     -> offset 0
+    //   'append'    -> offset = queueDetails.length (next page)
+    //   'reconcile' -> offset 0
+    buildQueueQuery({ mode }) {
+      const f = this._queueFilters;
+      const params = new URLSearchParams();
+      let statuses = [];
+      if (f.state === 'active') statuses = ['pending', 'processing'];
+      else if (f.state === 'done') statuses = ['completed', 'failed', 'cancelled'];
+      for (const s of f.status) {
+        if (!statuses.includes(s)) statuses.push(s);
+      }
+      if (statuses.length > 0) params.set('status', statuses.join(','));
+      if (f.model) params.set('model', f.model);
+      const q = (f.q || '').trim();
+      if (q) params.set('q', q);
+      params.set('offset', mode === 'append' ? String(this.queueDetails.length) : '0');
+      params.set('limit', '100');
+      return params.toString();
+    },
+
+    async loadQueuePage({ mode }) {
+      if (this._queueLoading) return;
+      this._queueLoading = true;
+      try {
+        const resp = await fetch(`/api/v1/queue/default/?${this.buildQueueQuery({ mode })}`);
         if (!resp.ok) return;
         const data = await resp.json();
-        this.queueDetails = data.items || [];
-      } catch (e) {}
+        const incoming = data.items || [];
+
+        if (mode === 'reset') {
+          this.queueDetails = incoming;
+          this._queuePage = 0;
+        } else if (mode === 'append') {
+          this._queuePage += 1;
+          const seen = new Set(this.queueDetails.map(i => i.item_id));
+          const fresh = incoming.filter(i => !seen.has(i.item_id));
+          this.queueDetails = [...this.queueDetails, ...fresh];
+        } else { // 'reconcile' — merge page 0 in place, preserve scroll position
+          const byId = new Map(incoming.map(i => [i.item_id, i]));
+          for (const row of this.queueDetails) {
+            const fresh = byId.get(row.item_id);
+            if (fresh) {
+              row.status = fresh.status;
+              row.error = fresh.error;
+              row.output_image_name = fresh.output_image_name;
+            }
+          }
+          const known = new Set(this.queueDetails.map(i => i.item_id));
+          const brandNew = incoming.filter(i => !known.has(i.item_id));
+          if (brandNew.length) this.queueDetails = [...this.queueDetails, ...brandNew];
+        }
+
+        this.queueTotal = data.total ?? this.queueDetails.length;
+        this.queuePriorityCount = data.priority_count ?? 0;
+        this.queueHasMore = !!data.has_more;
+        this.queueSummary = data.summary || this.queueSummary;
+        this.queueModels = data.models || [];
+      } catch (e) {
+        // Leave state as-is on failure; the next poll / action will retry.
+      } finally {
+        this._queueLoading = false;
+      }
+    },
+
+    onQueueScroll() {
+      const el = this.$refs.queueBody;
+      if (!el) return;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 300
+          && this.queueHasMore && !this._queueLoading) {
+        this.loadQueuePage({ mode: 'append' });
+      }
+    },
+
+    updateQueueFilters() {
+      this._queueFilters.q = this.queueSearchDraft.trim();
+      this.loadQueuePage({ mode: 'reset' });
+    },
+
+    resetQueueFilters() {
+      this.queueSearchDraft = '';
+      this._queueFilters = { state: 'all', status: [], model: '', q: '' };
+      this.loadQueuePage({ mode: 'reset' });
+    },
+
+    setQueueState(state) {
+      this._queueFilters.state = state;
+      this._queueFilters.status =
+        state === 'active' ? ['pending', 'processing']
+        : state === 'done' ? ['completed', 'failed', 'cancelled']
+        : [];
+      this.loadQueuePage({ mode: 'reset' });
+    },
+
+    // Show the "Prepend" divider after the last priority row.
+    isLastPriorityRow(idx) {
+      return idx === this.queuePriorityCount - 1 && idx > 0;
+    },
+
+    // Client-side copy of the backend filter — used by the queue_item_enqueued
+    // WS handler to decide whether a brand-new item should be appended live.
+    rowMatchesFilters(item) {
+      const f = this._queueFilters;
+      let statuses = [];
+      if (f.state === 'active') statuses = ['pending', 'processing'];
+      else if (f.state === 'done') statuses = ['completed', 'failed', 'cancelled'];
+      for (const s of f.status) {
+        if (!statuses.includes(s)) statuses.push(s);
+      }
+      if (statuses.length > 0 && !statuses.includes(item.status)) return false;
+      if (f.model && item.model_key !== f.model) return false;
+      const q = (f.q || '').trim().toLowerCase();
+      if (q && !(item.prompt || '').toLowerCase().includes(q)) return false;
+      return true;
+    },
+
+    timeAgo(iso) {
+      if (!iso) return '';
+      // Backend timestamps are naive UTC — parse them as UTC.
+      const t = new Date(/[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
+      if (isNaN(t.getTime())) return '';
+      const s = Math.floor((Date.now() - t.getTime()) / 1000);
+      if (s < 60) return 'just now';
+      if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+      return t.toLocaleDateString();
+    },
+
+    async loadQueueDetails() {
+      await this.loadQueuePage({ mode: 'reset' });
       // Keep loaded-model indicator and VRAM in sync while on the queue tab.
       await this.checkLoadedModel();
       await this.loadWorkerStatus();
@@ -1153,7 +1344,7 @@ function app() {
     async cancelQueueItem(itemId) {
       try {
         await fetch(`/api/v1/queue/default/i/${itemId}`, { method: 'DELETE' });
-        await this.loadQueueDetails();
+        await this.loadQueuePage({ mode: 'reset' });
       } catch (e) { this._setError('Could not cancel item.'); }
     },
 
@@ -1161,7 +1352,7 @@ function app() {
       try {
         const resp = await fetch(`/api/v1/queue/default/i/${itemId}/move_front`, { method: 'PUT' });
         if (!resp.ok) throw new Error(await resp.text());
-        await this.loadQueueDetails();
+        await this.loadQueuePage({ mode: 'reset' });
       } catch (e) { this._setError(`Could not move item to front: ${e.message}`); }
     },
 
@@ -1173,14 +1364,14 @@ function app() {
         this.queueItems.push(data.item_id);
         this.isGenerating = true;
         this._pollItem(data.item_id); // safety-net timeout only
-        await this.loadQueueDetails();
+        await this.loadQueuePage({ mode: 'reset' });
       } catch (e) { this._setError(`Could not resubmit: ${e.message}`); }
     },
 
     async pruneQueue() {
       try {
         await fetch('/api/v1/queue/default/prune', { method: 'PUT' });
-        await this.loadQueueDetails();
+        await this.loadQueuePage({ mode: 'reset' });
         this.queueItems = this.queueItems.filter(id =>
           this.queueDetails.some(d => d.item_id === id && (d.status === 'pending' || d.status === 'processing'))
         );
@@ -1339,6 +1530,8 @@ function app() {
           source_type: 'hf_repo_id',
           ...(this.hfInstall.apiKey.trim()    ? { hf_api_key:    this.hfInstall.apiKey.trim() }    : {}),
           ...(this.hfInstall.quantization     ? { quantization:  this.hfInstall.quantization }      : {}),
+          vae_tiling: this.hfInstall.vaeTiling,
+          use_compel: this.hfInstall.useCompel,
         };
         const resp = await fetch(`/api/v2/models/install?${new URLSearchParams({ source: repoId })}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1347,7 +1540,7 @@ function app() {
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
         // Reset form on success
-        this.hfInstall = { repoId: '', name: '', base: 'sd-1', apiKey: '', quantization: '', pending: false };
+        this.hfInstall = { repoId: '', name: '', base: 'sd-1', apiKey: '', quantization: '', vaeTiling: false, useCompel: true, pending: false };
       } catch (e) {
         this._setError(`Install failed: ${e.message}`);
       } finally {
@@ -1400,6 +1593,34 @@ function app() {
         if (!resp.ok) throw new Error(await resp.text());
         await this.loadModels();
       } catch (e) { this._setError(`Could not update quantization: ${e.message}`); }
+    },
+
+    async setModelVaeTiling(key, enabled) {
+      this.vaeTilingPendingKey = key;
+      try {
+        const resp = await fetch(`/api/v2/models/${key}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vae_tiling: !!enabled }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.loadModels();
+      } catch (e) { this._setError(`Could not update VAE tiling: ${e.message}`); }
+      finally { this.vaeTilingPendingKey = null; }
+    },
+
+    async setModelUseCompel(key, enabled) {
+      this.useCompelPendingKey = key;
+      try {
+        const resp = await fetch(`/api/v2/models/${key}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ use_compel: !!enabled }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.loadModels();
+      } catch (e) { this._setError(`Could not update Compel: ${e.message}`); }
+      finally { this.useCompelPendingKey = null; }
     },
 
     openMergeModal() {
@@ -1695,8 +1916,13 @@ function app() {
             case 'S': e.preventDefault(); this.adoptSettings('seed');   break;
             case 'D': e.preventDefault(); this.adoptSettings('size');   break;
             case 'A': e.preventDefault(); this.adoptSettings('all');    break;
+            case 'N': e.preventDefault(); this.adoptSettings('negative'); break;
+            case 'M': e.preventDefault(); this.adoptSettings('model');    break;
+            case 'R': e.preventDefault(); this.adoptSettings('steps');    break;
+            case 'L': e.preventDefault(); this.adoptSettings('loras');    break;
             case 'V': e.preventDefault(); this.togglePreview();         break;
             case 'I': e.preventDefault(); this.toggleInfoOverlay();     break;
+            case 'F': e.preventDefault(); this.toggleStar();            break;
           }
         }
       });

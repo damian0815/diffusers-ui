@@ -5,7 +5,6 @@ import logging
 import types
 
 import torch
-from diffusers import SanaPAGPipeline
 from diffusers.utils.torch_utils import randn_tensor
 from tqdm.auto import tqdm
 
@@ -51,8 +50,13 @@ class PipelineLoader:
         self._loaded_key: str | None = None
         self._registry = registry   # ModelRegistry, used to resolve merge components
 
-    def load(self, entry: ModelEntry):
-        """Load the pipeline for the given model entry. No-op if already loaded."""
+    def load(self, entry: ModelEntry, vae_slicing: bool = False):
+        """Load the pipeline for the given model entry. No-op if already loaded.
+
+        ``vae_slicing`` is a queue-level request to also split the VAE decode
+        across the batch dimension (force-enabled as an OOM fallback). Per-model
+        ``entry.vae_tiling`` is applied independently when set.
+        """
         if self._loaded_key == entry.key:
             return self._pipeline
         self._unload()
@@ -72,6 +76,8 @@ class PipelineLoader:
                 ).to(device=settings.device, dtype=settings.dtype)
                 self._pipeline.vae = self._pipeline.vae.to(dtype=settings.vae_dtype)
                 _enable_fast_attention(self._pipeline)
+            _maybe_enable_vae_tiling(self._pipeline, entry)
+            _maybe_enable_vae_slicing(self._pipeline, entry.name, vae_slicing)
             self._loaded_key = entry.key
         except Exception as exc:
             raise PipelineLoadError(
@@ -112,6 +118,11 @@ class PipelineLoader:
             # that cannot be moved to CPU fail gracefully without aborting.
             if is_cuda:
                 for _name, mod in pipeline.components.items():
+                    # If hook stripping failed, accelerate still owns the
+                    # module; .to() would only log the "dispatched using
+                    # accelerate hooks" warning and do nothing, so skip it.
+                    if getattr(mod, "_hf_hook", None) is not None:
+                        continue
                     try:
                         mod.to("cpu")
                     except Exception:
@@ -136,6 +147,17 @@ class PipelineLoader:
         """Public API: unload the current pipeline and free VRAM."""
         self._unload()
 
+    def enable_vae_slicing_on_loaded(self) -> None:
+        """Enable VAE slicing on the currently loaded pipeline (if any).
+
+        Used by the worker's OOM fallback so a retried batch immediately
+        benefits without waiting for a full reload.
+        """
+        if self._pipeline is None:
+            logging.info("VAE slicing requested but no pipeline is loaded.")
+            return
+        _maybe_enable_vae_slicing(self._pipeline, self._loaded_key or "unknown", True)
+
     @property
     def loaded_key(self) -> str | None:
         return self._loaded_key
@@ -150,8 +172,10 @@ def _load_sana_pipeline(entry: ModelEntry):
     Load a SanaPipeline with optional bitsandbytes quantization.
 
     SANA dtype requirements:
-      - The full pipeline is loaded in float32 so the VAE stays stable.
-      - text_encoder and transformer are then cast to bfloat16.
+      - The whole pipeline is loaded as bfloat16 via ``torch_dtype`` in
+        ``from_pretrained``; diffusers keeps any float32-only modules
+        (e.g. VAE upsamplers) in float32 automatically.
+      - Device placement is a plain ``.to(device=...)`` — no dtype casts.
     With quantization (int8 / int4):
       - Both text_encoder and transformer are loaded with BitsAndBytesConfig.
       - device_map="balanced" handles placement automatically (no manual .to()).
@@ -208,15 +232,16 @@ def _load_sana_pipeline(entry: ModelEntry):
             token=entry.hf_api_key,
         )
     else:
-        # Standard (non-quantized) SANA loading
-        load_kwargs: dict = {"torch_dtype": torch.float32}
+        # Standard (non-quantized) SANA loading. Pass the dtype to
+        # from_pretrained directly: diffusers casts the model and keeps any
+        # float32-only modules (VAE upsamplers) in float32 itself, instead of
+        # us casting afterwards with .to() (which emits the "should be kept in
+        # float32" / "accelerate hooks" warnings).
+        load_kwargs: dict = {"torch_dtype": torch.bfloat16}
         if entry.hf_api_key:
             load_kwargs["token"] = entry.hf_api_key
         pipeline = SanaPipeline.from_pretrained(entry.source, **load_kwargs)
         pipeline.to(device=settings.device)
-        # Cast the heavy compute modules to bfloat16 to halve VRAM usage
-        pipeline.text_encoder.to(torch.bfloat16)
-        pipeline.transformer = pipeline.transformer.to(torch.bfloat16)
 
     # ── img2img monkey patches ──────────────────────────────────────
     _apply_sana_img2img_patches(pipeline)
@@ -276,6 +301,46 @@ def _dtype_for_device(device: str):
     if device == "cpu":
         return torch.float32
     return torch.float16
+
+
+def _maybe_enable_vae_tiling(pipeline, entry: ModelEntry) -> None:
+    """Enable VAE tiling on a freshly loaded pipeline if the model asks for it.
+
+    VAE tiling splits a large latent spatially into tiles, decodes each tile
+    separately and stitches them back, cutting peak VRAM for big images (the
+    SANA VAE decode OOMs on ~11GB GPUs without it). Calls the VAE directly
+    rather than the (deprecated for SanaPipeline) pipeline-level method so no
+    deprecation warning is emitted. No-op when the pipeline's VAE doesn't
+    support tiling (defensive — a custom/quantized VAE may not).
+    """
+    if not entry.vae_tiling:
+        return
+    vae = getattr(pipeline, "vae", None)
+    enable = getattr(vae, "enable_tiling", None)
+    if enable is None:
+        logging.info("VAE tiling requested for %r but its VAE does not support it.", entry.name)
+        return
+    enable()
+    logging.info("VAE tiling enabled for model %r.", entry.name)
+
+
+def _maybe_enable_vae_slicing(pipeline, model_name: str, requested: bool) -> None:
+    """Enable VAE slicing on the pipeline's VAE when requested.
+
+    VAE slicing splits the decode across the batch dimension (one image at a
+    time), which reduces peak VRAM when generating a batch of images. It is the
+    memory fallback the worker force-enables after an OOM at batch size >1.
+    No-op when the pipeline's VAE doesn't support slicing (defensive).
+    """
+    if not requested:
+        return
+    vae = getattr(pipeline, "vae", None)
+    enable = getattr(vae, "enable_slicing", None)
+    if enable is None:
+        logging.info("VAE slicing requested for %r but its VAE does not support it.", model_name)
+        return
+    enable()
+    logging.info("VAE slicing enabled for model %r.", model_name)
 
 
 def _enable_fast_attention(pipeline) -> None:

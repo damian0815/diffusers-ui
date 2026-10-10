@@ -18,7 +18,7 @@ from backend.config import settings
 from backend.domain import GenerationCancelled, QueueItem, ItemStatus
 from backend.pipeline.batcher import get_critical_params
 from backend.pipeline.preview import latents_to_preview_image, PreviewBroadcaster
-from backend.pipeline.compel_encoder import build_prompt_embeds
+from backend.pipeline.compel_encoder import build_prompt_embeds, build_sana_prompt_embeds
 from backend.pipeline.mem_stats import MemoryAdvisor
 from backend.prompt_utils import EMBEDDING_RE, expand_prompt
 
@@ -246,6 +246,11 @@ class PipelineWorker:
         return self._mem_advisor.max_batch_size_override
 
     @property
+    def vae_slicing(self) -> bool:
+        """Whether VAE slicing is forced on (batch-dimension decode split)."""
+        return self._mem_advisor.vae_slicing
+
+    @property
     def images_per_sec(self) -> float:
         """Rolling-window average images/sec over recent generations."""
         return self._timing_tracker.images_per_sec
@@ -306,6 +311,30 @@ class PipelineWorker:
         """
         self._cancel_event.set()
 
+    def set_vae_slicing(self, enabled: bool) -> None:
+        """Set the queue-level VAE slicing flag and persist it.
+
+        Enabling also applies immediately to the currently loaded pipeline so
+        the very next generation benefits. Disabling takes effect on the next
+        model load (VAE slicing stays active on the loaded pipeline until then).
+        """
+        enabled = bool(enabled)
+        self._mem_advisor.vae_slicing = enabled
+        self.save_batch_state()
+        if enabled:
+            try:
+                self._loader.enable_vae_slicing_on_loaded()
+            except Exception:
+                logger.exception("Failed to enable VAE slicing on the loaded pipeline")
+        logger.info("VAE slicing %s", "enabled" if enabled else "disabled")
+
+    def _force_enable_vae_slicing(self) -> None:
+        """OOM fallback: turn on VAE slicing (persisted) unless already on."""
+        if self.vae_slicing:
+            return
+        logger.warning("Force-enabling VAE slicing as an OOM fallback.")
+        self.set_vae_slicing(True)
+
     async def _load_loras(self, pipeline, batch: list[QueueItem]) -> None:
         """Load and activate LoRAs for the current batch.
 
@@ -321,14 +350,19 @@ class PipelineWorker:
                     batch_loras[key] = strength
 
         batch_lora_set = set(batch_loras.keys())
+        # Assign short, stable adapter names. Sorted so the same set always maps
+        # the same file to the same name across batch boundaries.
+        adapter_name_for = {
+            filename: f"lora_adapter_{i}" for i, filename in enumerate(sorted(batch_lora_set))
+        }
 
         # Skip if LoRAs haven't changed
         if batch_lora_set == self._loaded_loras:
             # Same set — just update weights (they may differ per batch)
             if batch_lora_set:
-                adapter_names = list(batch_lora_set)
-                # Use the first item's weights as representative for the batch
-                weights = [batch_loras[k] for k in adapter_names]
+                adapter_names = [adapter_name_for[f] for f in batch_lora_set]
+                weights = [batch_loras[f] for f in batch_lora_set]
+                await asyncio.to_thread(pipeline.enable_lora)
                 await asyncio.to_thread(
                     pipeline.set_adapters, adapter_names, adapter_weights=weights
                 )
@@ -336,33 +370,35 @@ class PipelineWorker:
 
         # Unload previous LoRAs if any
         if self._loaded_loras:
-            await asyncio.to_thread(pipeline.unload_lora)
+            await asyncio.to_thread(pipeline.unload_lora_weights)
             self._loaded_loras.clear()
 
         # Load new LoRAs
         if batch_lora_set:
+            loaded = set()
             for filename in batch_lora_set:
                 try:
                     await asyncio.to_thread(
                         pipeline.load_lora_weights,
                         settings.loras_dir,
                         weight_name=filename,
-                        adapter_name=filename,
+                        adapter_name=adapter_name_for[filename],
                     )
+                    loaded.add(filename)
                 except Exception as exc:
                     logger.error("Failed to load LoRA %s: %s", filename, exc)
                     # Skip this LoRA but continue with others
                     continue
 
-            # Activate LoRAs with their weights
-            adapter_names = [k for k in batch_lora_set if k not in batch_loras or True]
-            # Filter to only successfully loaded adapters
-            adapter_names = list(batch_lora_set)
-            weights = [batch_loras[k] for k in adapter_names]
-            await asyncio.to_thread(
-                pipeline.set_adapters, adapter_names, adapter_weights=weights
-            )
-            self._loaded_loras = batch_lora_set.copy()
+            # Activate successfully loaded LoRAs with their weights
+            adapter_names = [adapter_name_for[f] for f in loaded]
+            weights = [batch_loras[f] for f in loaded]
+            if adapter_names:
+                await asyncio.to_thread(pipeline.enable_lora)
+                await asyncio.to_thread(
+                    pipeline.set_adapters, adapter_names, adapter_weights=weights
+                )
+            self._loaded_loras = loaded
 
     async def _apply_embedding(self, pipeline, embedding_path: str, name: str) -> None:
         """Load a .safetensors TI and inject its weights into the text encoder.
@@ -452,7 +488,7 @@ class PipelineWorker:
             return False
 
         try:
-            pipeline = await asyncio.to_thread(self._loader.load, entry)
+            pipeline = await asyncio.to_thread(self._loader.load, entry, self.vae_slicing)
         except Exception as exc:
             for item in batch:
                 await self._queue.mark_failed(item, str(exc))
@@ -504,19 +540,25 @@ class PipelineWorker:
         seeds = [item.params.seed for item in batch]
 
         # Encode prompts.
-        # SANA uses a Gemma text encoder — Compel doesn't support it.
-        # Pass raw strings directly; the pipeline handles encoding internally.
-        if is_sana:
-            prompt_kwargs: dict = {
+        # When use_compel is ON (default), encode via Compel — this supports
+        # weighted syntax and long prompts. CompelForSana handles SANA's Gemma
+        # text encoder. When OFF, pass raw strings and let the pipeline encode
+        # internally. Encoding runs in a thread because it calls the GPU-bound
+        # text encoder.
+        if entry.use_compel:
+            if is_sana:
+                prompt_kwargs: dict = await asyncio.to_thread(
+                    build_sana_prompt_embeds, pipeline, prompts, neg_prompts
+                )
+            else:
+                prompt_kwargs = await asyncio.to_thread(
+                    build_prompt_embeds, pipeline, prompts, neg_prompts, is_sdxl=is_sdxl
+                )
+        else:
+            prompt_kwargs = {
                 "prompt": prompts if len(prompts) > 1 else prompts[0],
                 "negative_prompt": neg_prompts if len(neg_prompts) > 1 else neg_prompts[0],
             }
-        else:
-            # Encode prompts with Compel (supports weighted syntax and long prompts).
-            # Runs in a thread because text encoding calls the GPU-bound text encoder.
-            prompt_kwargs = await asyncio.to_thread(
-                build_prompt_embeds, pipeline, prompts, neg_prompts, is_sdxl=is_sdxl
-            )
 
         step_counter: dict[str, int] = {"n": 0}
         event_loop = asyncio.get_event_loop()
@@ -730,10 +772,6 @@ class PipelineWorker:
                 )
                 await self._record_in_gallery(item, image_name, entry.name)
 
-            # Disable LoRAs to reset for next batch
-            if self._loaded_loras:
-                await asyncio.to_thread(pipeline.disable_lora)
-
             return False  # success — no OOM
 
         except GenerationCancelled:
@@ -798,6 +836,11 @@ class PipelineWorker:
 
         # Record OOM and regress the probe.
         self._mem_advisor.record_oom(len(batch))
+
+        # Staggered fallback: an OOM at batch size >1 also force-enables VAE
+        # slicing (batch-dimension decode split), so the halved retry below runs
+        # with lower decode VRAM. Persisted so future loads keep it.
+        self._force_enable_vae_slicing()
 
         # Split the batch in half.
         mid = max(1, len(batch) // 2)

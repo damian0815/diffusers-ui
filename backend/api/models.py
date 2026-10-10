@@ -18,12 +18,16 @@ class InstallBody(BaseModel):
     source_type: str = "hf_repo_id"
     hf_api_key: str | None = None
     quantization: str | None = None
+    vae_tiling: bool = False
+    use_compel: bool = True
 
 
 class UpdateBody(BaseModel):
     """Used by PATCH /{key} — all fields optional; only supplied ones are changed."""
     name: str | None = None
     quantization: str | None = None
+    vae_tiling: bool | None = None
+    use_compel: bool | None = None
 
 
 class MergeComponentBody(BaseModel):
@@ -95,6 +99,8 @@ async def install_model(source: str, body: InstallBody, request: Request):
         source_type=body.source_type,
         hf_api_key=body.hf_api_key,
         quantization=body.quantization,
+        vae_tiling=body.vae_tiling,
+        use_compel=body.use_compel,
     )
     return _entry_to_dict(entry, registry)
 
@@ -117,6 +123,10 @@ async def update_model(key: str, body: UpdateBody, request: Request):
         ):
             quant = body.quantization if body.quantization else None
             entry = registry.update_quantization(key, quant)
+        if body.vae_tiling is not None:
+            entry = registry.update_vae_tiling(key, body.vae_tiling)
+        if body.use_compel is not None:
+            entry = registry.update_use_compel(key, body.use_compel)
     except ModelNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return _entry_to_dict(entry, registry)
@@ -196,6 +206,8 @@ def _entry_to_dict(entry: ModelEntry, registry) -> dict:
         "kind": entry.kind,
         "has_api_key": entry.hf_api_key is not None,
         "quantization": entry.quantization,
+        "vae_tiling": entry.vae_tiling,
+        "use_compel": entry.use_compel,
         "files_missing": files_missing,
         "merge": (
             [
