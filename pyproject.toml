@@ -17,7 +17,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "tqdm",
-    "compel>=2.3.1",
+    "compel>=2.5.0",
     "bitsandbytes",
     "python-multipart",
     "safetensors>=0.4",
@@ -46,9 +46,6 @@ testpaths = ["tests"]
 python_version = "3.12"
 strict = false
 ignore_missing_imports = true
-
-[tool.uv.sources]
-compel = { path = "../compel/dist/compel-2.5.0.dev1-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [
