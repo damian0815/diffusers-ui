@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "diffusers_ui",
+  "project_id": "779ea219-8512-4828-bc8f-57bbcf6971f8"
+}
