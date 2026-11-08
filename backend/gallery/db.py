@@ -1,4 +1,4 @@
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncSession,
@@ -15,6 +15,26 @@ class Base(DeclarativeBase):
 
 engine = create_async_engine(settings.db_url, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _sqlite_pragmas(dbapi_connection, connection_record):
+    """Make the DB safe for concurrent access from worker + API.
+
+    The worker writes status transitions (and the worker writes to the same
+    DB file from the gallery recorder) while generations run; without these
+    pragmas the rollback-journal lock means API reads/writes could block or
+    hit "database is locked". WAL allows concurrent readers with a single
+    writer; busy_timeout makes writers wait politely instead of failing.
+    """
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+    except Exception:
+        pass  # in-memory / non-SQLite test engines — nothing to configure
 
 
 def _column_names(conn, table: str) -> set[str]:

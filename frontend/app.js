@@ -65,6 +65,14 @@ function app() {
     _queueFilters: { state: 'all', status: [], model: '', q: '' },
     queueSearchDraft: '',
     _queueTimer: null,
+    _queueUpdatedTimer: null,  // debounce for queue_updated (WS) reloads
+    _queueChain: null,         // promise serialising queue-list fetches
+    _queueUpdatedTimer: null,  // debounce for queue_updated (WS) reloads
+    clearPending: false,       // action-feedback flags: true while the request is in flight
+    prunePending: false,
+    pausePending: false,
+    cancelRequested: false,    // true after Cancel pressed, until the WS cancellation events arrive
+    itemBusy: {},              // { "action:item_id": true } per-row action feedback
     errorMessage: null,
     _errorExpanded: false,     // true when the nav-error toast is expanded to show the full message
     _errorTimer: null,         // setTimeout handle for auto-hiding the toast
@@ -246,6 +254,10 @@ function app() {
           this._onItemFinished(data.item_id);
           const row = this.queueDetails.find(i => i.item_id === data.item_id);
           if (row) row.status = 'cancelled';
+        } else if (event === "queue_updated") {
+          // Structural change from the server (prune, move_front, etc.).
+          // Reload the queue so all clients see the updated state immediately.
+          this.loadQueuePage({ mode: "reset" });
         } else if (event === 'worker_paused') {
           this.isPaused = true;
         } else if (event === 'worker_resumed') {
@@ -396,7 +408,7 @@ function app() {
         this.$nextTick(() => this._attachQueueScroll());
         this._queueTimer = setInterval(() => {
           if (this.activeTab === 'queue') this.loadQueuePage({ mode: 'reconcile' });
-        }, 2000);
+        }, 10000);
       }
     },
 
@@ -1118,30 +1130,105 @@ function app() {
       } catch (e) { this._setError('Could not update star.'); }
     },
 
+    async _handleQueueUpdated({ detail }) {
+      // Debounce queue_updated broadcasts — only one reload at a time, in case
+      // multiple mutations fire in quick succession (e.g. cancel_all then prune).
+      clearTimeout(this._queueUpdatedTimer);
+      this._queueUpdatedTimer = setTimeout(() => {
+        this.loadQueuePage({ mode: 'reset' });
+        this._queueUpdatedTimer = null;
+      }, 300);
+    },
+
     // ----------------------------------------------------------------
     // Queue
     // ----------------------------------------------------------------
 
     async clearQueue() {
-      try { await fetch('/api/v1/queue/default/clear', { method: 'PUT' }); this.queueItems = []; await this.loadQueuePage({ mode: 'reset' }); }
-      catch (e) { this._setError('Could not clear queue.'); }
+      if (this.clearPending) return;
+      this.clearPending = true;
+      try {
+        await fetch('/api/v1/queue/default/clear', { method: 'PUT' });
+        this.queueItems = [];
+        await this.loadQueuePage({ mode: 'reset' });
+      } catch (e) { this._setError('Could not clear queue.'); } finally {
+        this.clearPending = false;
+      }
     },
 
     async cancelGeneration() {
+      if (this.cancelRequested) return;
+      this.cancelRequested = true;
       try {
         await fetch('/api/v1/queue/default/cancel_current', { method: 'PUT' });
       } catch (e) {
         this._setError('Could not cancel generation.');
+      } finally {
+        this.cancelRequested = false;
       }
     },
 
     async togglePause() {
+      if (this.pausePending) return;
+      this.pausePending = true;
       try {
         const method = this.isPaused ? 'resume' : 'pause';
         await fetch(`/api/v1/queue/default/${method}`, { method: 'PUT' });
         this.isPaused = !this.isPaused;
       } catch (e) {
         this._setError('Could not toggle pause.');
+      } finally {
+        this.pausePending = false;
+      }
+    },
+
+    async cancelQueueItem(itemId) {
+      if (this.itemBusy[`cancel:${itemId}`]) return;
+      this.itemBusy[`cancel:${itemId}`] = true;
+      try {
+        await fetch(`/api/v1/queue/default/i/${itemId}`, { method: 'DELETE' });
+        await this.loadQueuePage({ mode: 'reset' });
+      } catch (e) { this._setError('Could not cancel item.'); } finally {
+        this.itemBusy[`cancel:${itemId}`] = false;
+      }
+    },
+
+    async moveToFront(itemId) {
+      if (this.itemBusy[`move_front:${itemId}`]) return;
+      this.itemBusy[`move_front:${itemId}`] = true;
+      try {
+        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/move_front`, { method: 'PUT' });
+        if (!resp.ok) throw new Error(await resp.text());
+        await this.loadQueuePage({ mode: 'reset' });
+      } catch (e) { this._setError(`Could not move item to front: ${e.message}`); } finally {
+        this.itemBusy[`move_front:${itemId}`] = false;
+      }
+    },
+
+    async resubmitItem(itemId) {
+      if (this.itemBusy[`resubmit:${itemId}`]) return;
+      this.itemBusy[`resubmit:${itemId}`] = true;
+      try {
+        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/resubmit?prepend=true`, { method: 'POST' });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        this.queueItems.push(data.item_id);
+        this.isGenerating = true;
+        this._pollItem(data.item_id);
+        await this.loadQueuePage({ mode: 'reset' });
+      } catch (e) { this._setError(`Could not resubmit: ${e.message}`); } finally {
+        this.itemBusy[`resubmit:${itemId}`] = false;
+      }
+    },
+
+    async pruneQueue() {
+      if (this.prunePending) return;
+      this.prunePending = true;
+      try {
+        await fetch('/api/v1/queue/default/prune', { method: 'PUT' });
+        await this.loadQueuePage({ mode: 'reset' });
+      } catch (e) { this._setError('Could not prune queue.'); } finally {
+        this.prunePending = false;
       }
     },
 

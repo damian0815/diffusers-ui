@@ -125,10 +125,10 @@ class QueueItem:
     output_image_name: str | None = None
     error: str | None = None
     # priority=True: item was enqueued to the front; skip batch window & run solo
-    priority: bool = False
-    # Ordering priority: higher numbers render/process earlier; FIFO by
+    # priority_value: higher numbers render/process earlier; FIFO by
     # submission serial within equal priority.  (The run-now bool above is the
     # "jump the queue entirely" switch; this only ranks normal queuing.)
+    priority: bool = False
     priority_value: int = 1
     created_at: datetime | None = field(default_factory=datetime.utcnow)
 

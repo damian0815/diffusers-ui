@@ -76,7 +76,8 @@ async def test_cancel_all_only_affects_pending(qm):
     processing = await qm.enqueue(QueueItem(params=make_params()))
     await qm.mark_processing(processing)
     count = await qm.cancel_all()
-    assert count == 1
+    assert len(count) == 1
+    assert count == [pending]
     assert qm.get_item(pending.item_id).status == ItemStatus.CANCELLED
     assert qm.get_item(processing.item_id).status == ItemStatus.PROCESSING
 

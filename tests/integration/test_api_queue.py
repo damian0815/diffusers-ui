@@ -1,5 +1,7 @@
 """Integration tests for /api/v1/queue/* endpoints."""
 import pytest
+from unittest.mock import AsyncMock
+
 from tests.conftest import make_enqueue_body
 
 # ---------------------------------------------------------------------------
@@ -69,6 +71,81 @@ async def test_clear_queue(client):
     resp = await client.put("/api/v1/queue/default/clear")
     assert resp.status_code == 200
     assert "cancelled_count" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# WebSocket event broadcasts on queue mutations
+# ---------------------------------------------------------------------------
+
+def _last_broadcast(broadcaster, event_type):
+    """Return the most recent broadcast of *event_type* (or None)."""
+    calls = [c for c in broadcaster.broadcast_event.await_args_list
+             if c.args[0] == event_type]
+    return calls[-1] if calls else None
+
+
+@pytest.fixture
+def mock_broadcaster(client):
+    """Replace the app broadcaster with a mock and pause the worker so no
+    background completion events interfere with assertions (the mock
+    pipeline would happily "generate" otherwise)."""
+    from unittest.mock import AsyncMock
+    worker = client._transport.app.state.worker
+    broadcaster = client._transport.app.state.broadcaster
+    worker.pause()
+    broadcaster.broadcast_event = AsyncMock()
+    return broadcaster
+
+
+@pytest.mark.asyncio
+async def test_cancel_pending_item_broadcasts_event(client, mock_broadcaster):
+    data = await enqueue_one(client)
+    item_id = data["item_ids"][0]
+    resp = await client.delete(f"/api/v1/queue/default/i/{item_id}")
+    assert resp.status_code == 200
+    assert resp.json()["cancelled"] is True
+    call = _last_broadcast(mock_broadcaster, "queue_item_cancelled")
+    assert call is not None
+    assert call.args[1] == {"item_id": item_id}
+
+
+@pytest.mark.asyncio
+async def test_clear_queue_broadcasts_cancelled_events(client, mock_broadcaster):
+    first = await enqueue_one(client)
+    second = await enqueue_one(client)
+    ids = {first["item_ids"][0], second["item_ids"][0]}
+    resp = await client.put("/api/v1/queue/default/clear")
+    assert resp.status_code == 200
+    assert resp.json()["cancelled_count"] == 2
+    calls = [c for c in mock_broadcaster.broadcast_event.await_args_list
+             if c.args[0] == "queue_item_cancelled"]
+    assert {c.args[1]["item_id"] for c in calls} == ids
+
+
+@pytest.mark.asyncio
+async def test_move_front_broadcasts_queue_updated(client, mock_broadcaster):
+    await enqueue_one(client)
+    second = await enqueue_one(client)
+    item_id = second["item_ids"][0]
+    resp = await client.put(f"/api/v1/queue/default/i/{item_id}/move_front")
+    assert resp.status_code == 200
+    call = _last_broadcast(mock_broadcaster, "queue_updated")
+    assert call is not None
+    assert call.args[1] == {"action": "move_front", "item_id": item_id}
+
+
+@pytest.mark.asyncio
+async def test_prune_broadcasts_queue_updated(client, mock_broadcaster):
+    data = await enqueue_one(client)
+    item_id = data["item_ids"][0]
+    await client.delete(f"/api/v1/queue/default/i/{item_id}")  # make it terminal
+    mock_broadcaster.broadcast_event.reset_mock()
+    resp = await client.put("/api/v1/queue/default/prune")
+    assert resp.status_code == 200
+    assert resp.json()["pruned_count"] == 1
+    call = _last_broadcast(mock_broadcaster, "queue_updated")
+    assert call is not None
+    assert call.args[1]["action"] == "prune"
 
 
 @pytest.mark.asyncio

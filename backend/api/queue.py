@@ -280,7 +280,7 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
             lora_keys=batch.lora_keys,
             lora_strengths=batch.lora_strengths,
         )
-        item = QueueItem(params=params, priority=prepend, priority_value=batch.priority)
+        item = QueueItem(params=params, priority=prepend or batch.priority > 1, priority_value=batch.priority)
         await queue.enqueue(item, prepend=prepend)
 
         item_dict = _queue_item_to_image_dict(item, model_name)
@@ -312,10 +312,18 @@ async def get_queue_item(queue_id: str, item_id: int, request: Request):
 async def cancel_item(queue_id: str, item_id: int, request: Request):
     """Cancel a pending queue item."""
     queue = request.app.state.queue
+    broadcaster = request.app.state.broadcaster
     item = queue.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Queue item {item_id} not found")
     cancelled = await queue.cancel_item(item_id)
+    if cancelled:
+        # Tell every connected client immediately so the UI reflects the
+        # cancellation without waiting for the next status poll.
+        await broadcaster.broadcast_event(
+            "queue_item_cancelled",
+            {"item_id": item_id},
+        )
     return {"queue_id": queue_id, "item_id": item_id, "cancelled": cancelled}
 
 
@@ -323,8 +331,14 @@ async def cancel_item(queue_id: str, item_id: int, request: Request):
 async def clear_queue(queue_id: str, request: Request):
     """Cancel all pending items in the queue."""
     queue = request.app.state.queue
-    count = await queue.cancel_all()
-    return {"queue_id": queue_id, "cancelled_count": count}
+    broadcaster = request.app.state.broadcaster
+    cancelled = await queue.cancel_all()
+    for item in cancelled:
+        await broadcaster.broadcast_event(
+            "queue_item_cancelled",
+            {"item_id": item.item_id},
+        )
+    return {"queue_id": queue_id, "cancelled_count": len(cancelled)}
 
 
 @router.put("/cancel_current")
@@ -415,7 +429,15 @@ async def set_vae_slicing(queue_id: str, request: Request, body: dict = Body(...
 async def prune_queue(queue_id: str, request: Request):
     """Remove completed/failed/cancelled items from tracking."""
     queue = request.app.state.queue
+    broadcaster = request.app.state.broadcaster
     count = await queue.prune()
+    if count:
+        # Pruning deletes rows from the list — clients must reload, so push
+        # a structural-change event rather than per-item patches.
+        await broadcaster.broadcast_event(
+            "queue_updated",
+            {"action": "prune", "count": count},
+        )
     return {"queue_id": queue_id, "pruned_count": count}
 
 
@@ -503,7 +525,7 @@ async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: 
     item = queue.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Queue item {item_id} not found")
-    new_item = QueueItem(params=item.params, priority=prepend, priority_value=item.priority_value)
+    new_item = QueueItem(params=item.params, priority=prepend or item.priority_value > 1, priority_value=item.priority_value)
     await queue.enqueue(new_item, prepend=prepend)
 
     registry    = request.app.state.registry
@@ -521,12 +543,19 @@ async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: 
 async def move_item_to_front(queue_id: str, item_id: int, request: Request):
     """Move a pending queue item to the front of the queue."""
     queue = request.app.state.queue
+    broadcaster = request.app.state.broadcaster
     moved = await queue.move_to_front(item_id)
     if not moved:
         raise HTTPException(
             status_code=400,
             detail=f"Item {item_id} is not pending or not found in queue"
         )
+    # Reordering is a structural change — push it so every client re-reads
+    # the list immediately instead of waiting for the next poll.
+    await broadcaster.broadcast_event(
+        "queue_updated",
+        {"action": "move_front", "item_id": item_id},
+    )
     return {"queue_id": queue_id, "item_id": item_id, "moved": True}
 
 

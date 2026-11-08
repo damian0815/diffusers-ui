@@ -196,12 +196,12 @@
               <label class="field-label">Seed <small>(-1 = random)</small></label>
               <input type="number" x-model.number="seed" min="-1" max="4294967295">
             </div>
+            <button class="icon-btn" title="Randomise" @click="seed = -1">🎲</button>
             <div class="field batch-count-field" style="flex:0 0 auto" title="Number of images per prompt variant (seed auto-increments)">
               <label class="field-label">Images</label>
               <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
                      style="width:56px;text-align:center" title="Batch count">
             </div>
-            <button class="icon-btn" title="Randomise" @click="seed = -1">🎲</button>
           </div>
 
           <div class="field-group">

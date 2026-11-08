@@ -261,20 +261,18 @@ class QueueManager:
         await self._persist(item)
         return True
 
-    async def cancel_all(self) -> int:
-        """Cancel all pending items. Returns count cancelled."""
-        count = 0
+    async def cancel_all(self) -> list[QueueItem]:
+        """Cancel all pending items. Returns the cancelled items."""
         cancelled: list[QueueItem] = []
         async with self._lock:
             for item in self._all_items.values():
                 if item.status == ItemStatus.PENDING:
                     item.status = ItemStatus.CANCELLED
                     cancelled.append(item)
-                    count += 1
             self._queue.clear()
         for item in cancelled:
             await self._persist(item)
-        return count
+        return cancelled
 
     async def prune(self) -> int:
         """Remove completed/failed/cancelled items. Returns count pruned."""
