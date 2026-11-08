@@ -38,7 +38,7 @@ class TIState:
 Sampler = Literal[
     'dpmpp_sde_k', 'dpmpp_sde', 'dpmpp_2m_sde_k', 'dpmpp_2m_sde',
     'dpmpp', 'dpmpp_2m', 'dpmpp_3m', 'euler', 'euler_a', 'ddim', 'lms', 'kdpm_2_a',
-    'euler_flowmatch_dynshift', 'euler_flowmatch_shift1'
+    'euler_flowmatch_dynshift', 'euler_flowmatch_shift1', 'euler_flowmatch_shift8'
 ]
 
 

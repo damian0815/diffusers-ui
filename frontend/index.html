@@ -78,22 +78,20 @@
           <button class="btn-primary"
                   @click="generate(false)"
                   :disabled="isEnqueuing || !modelKey"
-                  :class="{'is-loading': isEnqueuing}"
+                  :class="{'is-loading': isEnqueuing && !enqueuingPrepend}"
                   title="Generate  ·  ⌘↩">
-            <span x-text="isEnqueuing ? '· · ·' : '▶ Generate'"></span>
+            <span x-text="isEnqueuing && !enqueuingPrepend ? '· · ·' : '▶ Generate'"></span>
           </button>
+          <!-- Always visible; greyed out and unclickable when nothing is generating -->
           <button class="icon-btn sm danger"
                   @click="cancelGeneration()"
-                  x-show="isGenerating"
+                  :disabled="!isGenerating"
                   title="Cancel current generation">✕</button>
           <!-- pause/resume button is in the Queue view header -->
           <button class="icon-btn generate-priority" @click="generate(true)"
                   :disabled="isEnqueuing"
+                  :class="{'is-loading': enqueuingPrepend}"
                   title="Front of queue  ·  ⌘⇧↩">⏫</button>
-          <div class="field batch-count-field" title="Number of images per prompt variant (seed auto-increments)">
-            <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
-                   style="width:56px;text-align:center" title="Batch count">
-          </div>
           <div class="field batch-count-field" title="Queue priority: higher numbers move these generations earlier in the queue (ties keep submission order)">
             <input type="number" x-model.number="enqueuePriority" min="1" step="1"
                    style="width:56px;text-align:center" title="Queue priority (default 1)">
@@ -198,6 +196,11 @@
               <label class="field-label">Seed <small>(-1 = random)</small></label>
               <input type="number" x-model.number="seed" min="-1" max="4294967295">
             </div>
+            <div class="field batch-count-field" style="flex:0 0 auto" title="Number of images per prompt variant (seed auto-increments)">
+              <label class="field-label">Images</label>
+              <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
+                     style="width:56px;text-align:center" title="Batch count">
+            </div>
             <button class="icon-btn" title="Randomise" @click="seed = -1">🎲</button>
           </div>
 
@@ -270,6 +273,7 @@
                 <option value="euler_a">Euler A</option>
                 <option value="euler_flowmatch_dynshift">Euler FM DynShift</option>
                 <option value="euler_flowmatch_shift1">Euler FM Shift1</option>
+                <option value="euler_flowmatch_shift8">Euler FM Shift8</option>
                 <option value="ddim">DDIM</option>
                 <option value="lms">LMS</option>
                 <option value="dpmpp_3m">DPM++ 3M</option>

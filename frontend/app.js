@@ -48,6 +48,7 @@ function app() {
     vramTotal: 0,              // total device memory (bytes)
     imagesPerSec: 0,           // rolling-window avg images/sec over last 20 gens
     isEnqueuing: false,        // true during the enqueue network request
+    enqueuingPrepend: false,   // true when the in-flight enqueue is a prepend (juice on the prepend button)
     _previewDataUrl: null,     // latest live-preview data URL (null = no current frame)
     _currentDisplayName: null, // image_name currently shown (null when showing preview/nothing)
     _galleryFirstImage: null,  // first image_name in the current gallery (null = empty gallery)
@@ -472,6 +473,7 @@ function app() {
       if (this.isEnqueuing) return;
 
       this.isEnqueuing = true;
+      this.enqueuingPrepend = prepend;
 
       // Expand {a|b|c} brace syntax into prompt variants. The negative prompt
       // expands independently; the cartesian product of both is enqueued.
@@ -513,6 +515,7 @@ function app() {
         this._setError(`Generation failed: ${err.message}`);
       } finally {
         this.isEnqueuing = false;
+        this.enqueuingPrepend = false;
       }
     },
 

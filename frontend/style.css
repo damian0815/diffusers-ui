@@ -401,7 +401,29 @@ select option { background: var(--surface); }
 }
 .link-btn:hover { opacity: 1; text-decoration: underline; }
 
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.icon-btn.danger:disabled { color: var(--text-2); }
+.icon-btn:disabled:hover {
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
 .generate-priority { padding: 6px 10px; font-size: 15px; }
+/* Same shimmer treatment as .btn-primary.is-loading, for the prepend button */
+.generate-priority.is-loading {
+  background: linear-gradient(90deg,
+    var(--accent-dim) 0%, #818cf8 35%, var(--accent-hi) 50%, #818cf8 65%, var(--accent-dim) 100%);
+  background-size: 300% 100%;
+  animation: btn-shimmer 1.4s linear infinite;
+  cursor: wait;
+  color: #fff;
+}
+
+/* Fixed-size action buttons so the row doesn't reflow when state changes
+   (placed after .icon-btn.sm so the padding/width overrides win) */
+.generate-row > .btn-primary { flex: 0 0 140px; }
+.generate-row > .icon-btn    { width: 38px; padding: 6px 0; }
 .ar-select { font-size: 12px; padding: 5px 26px 5px 8px; color: var(--text-2); }
 .ar-lock { align-self: flex-end; }
 .swap-btn { align-self: flex-end; font-size: 16px; padding: 5px 8px; }
