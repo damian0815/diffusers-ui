@@ -37,9 +37,16 @@ def filter_items(
     return result
 
 
+def sort_key(item: QueueItem) -> tuple:
+    """Canonical ordering key: run-now (prepend) items first, then descending
+    priority_value, then ascending item_id (= submission serial)."""
+    return (not item.priority, -item.priority_value, item.item_id)
+
+
 def sort_queue(items) -> list[QueueItem]:
-    """Priority items first, then item_id ascending within each group."""
-    return sorted(items, key=lambda it: (not it.priority, it.item_id))
+    """Run-now items first, then by priority rank (higher first), then item_id
+    (= submission serial) ascending within each rank."""
+    return sorted(items, key=sort_key)
 
 
 def summarize(items) -> dict[str, int]:

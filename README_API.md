@@ -263,13 +263,19 @@ Enqueue one or more generation jobs. Accepts both the native flat format and the
     "crop_left": 0,
     "crop_top": 0,
     "crop_width": 0,
-    "crop_height": 0
+    "crop_height": 0,
+    "priority": 1
   }
 }
 ```
 
 When `count > 1` and `seed >= 0`, successive items auto-increment the seed.  
 When `seed == -1`, each item gets an independent random seed.
+
+`batch.priority` is an ordering rank: higher numbers render/process earlier
+(within equal rank, submission order is kept). Default `1`. Items enqueued
+with `prepend: true` always run ahead of everything ranked, regardless of
+`priority`. The legacy graph format accepts `batch.priority` the same way.
 
 **Response**
 ```json

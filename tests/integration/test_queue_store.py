@@ -50,6 +50,40 @@ async def test_store_round_trips_priority_and_created_at(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_store_round_trips_priority_value(tmp_path):
+    """priority_value persists (and defaults to 1); later updates round-trip."""
+    import backend.queue.models  # noqa: F401 — register ORM models
+    from backend.gallery.db import Base
+    from backend.queue.store import QueueStore
+
+    engine, session_factory = await _make_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    store = QueueStore(session_factory)
+
+    ranked = QueueItem(params=make_params(), priority_value=5)
+    await store.upsert(ranked)
+
+    normal = QueueItem(params=make_params())
+    await store.upsert(normal)
+
+    items = await store.load_all()
+    by_id = {it.item_id: it for it in items}
+    assert by_id[ranked.item_id].priority_value == 5
+    assert by_id[normal.item_id].priority_value == 1
+
+    # The update branch of upsert must persist rank changes too.
+    ranked.priority_value = 2
+    await store.upsert(ranked)
+    items = await store.load_all()
+    by_id = {it.item_id: it for it in items}
+    assert by_id[ranked.item_id].priority_value == 2
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_inline_migration_adds_priority_to_queue_items(tmp_path):
     """A DB whose queue_items table predates the priority column is migrated in
     place; existing rows read back as non-priority."""
@@ -96,6 +130,13 @@ async def test_inline_migration_adds_priority_to_queue_items(tmp_path):
             "SELECT priority FROM queue_items WHERE item_id = 1"
         ))).scalar_one()
         assert row == 0
+
+        # priority_value is added alongside; pre-existing rows read the default.
+        assert "priority_value" in cols
+        rank_row = (await conn.execute(text(
+            "SELECT priority_value FROM queue_items WHERE item_id = 1"
+        ))).scalar_one()
+        assert rank_row == 1
 
         # Idempotent — running again must not raise.
         await conn.run_sync(_apply_inline_migrations)

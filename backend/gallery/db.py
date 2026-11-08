@@ -67,6 +67,8 @@ def _apply_inline_migrations(conn) -> None:
             conn.execute(text("ALTER TABLE queue_items ADD COLUMN lora_strengths TEXT"))
         if "priority" not in existing:
             conn.execute(text("ALTER TABLE queue_items ADD COLUMN priority BOOLEAN NOT NULL DEFAULT 0"))
+        if "priority_value" not in existing:
+            conn.execute(text("ALTER TABLE queue_items ADD COLUMN priority_value INTEGER NOT NULL DEFAULT 1"))
 
 
 async def init_db() -> None:
@@ -75,6 +77,7 @@ async def init_db() -> None:
     import backend.gallery.models  # noqa: F401
     import backend.queue.models    # noqa: F401
     import backend.training.models  # noqa: F401
+    import backend.ranking.models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_apply_inline_migrations)

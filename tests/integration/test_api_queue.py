@@ -85,6 +85,23 @@ async def test_enqueue_prepend(client):
 
 
 @pytest.mark.asyncio
+async def test_list_is_ordered_by_priority_then_serial(client):
+    """Higher rank renders before lower rank; equal ranks keep submission order."""
+    await enqueue_one(client)                  # rank 1  (serial 1)
+    await enqueue_one(client)                  # rank 1  (serial 2)
+    high_body = make_enqueue_body()
+    high_body["batch"]["priority"] = 5
+    await client.post("/api/v1/queue/default/enqueue_batch", json=high_body)
+    mid_body = make_enqueue_body()
+    mid_body["batch"]["priority"] = 3
+    await client.post("/api/v1/queue/default/enqueue_batch", json=mid_body)
+
+    resp = await client.get("/api/v1/queue/default/")
+    ranks = [it["priority_value"] for it in resp.json()["items"]]
+    assert ranks == [5, 3, 1, 1]
+
+
+@pytest.mark.asyncio
 async def test_list_queue(client):
     await enqueue_one(client)
     resp = await client.get("/api/v1/queue/default/")

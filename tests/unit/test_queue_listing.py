@@ -227,6 +227,40 @@ def test_sort_queue_stable_for_equal_keys():
     assert result == [b, a]
 
 
+def test_sort_queue_higher_priority_value_first():
+    low = make_item(item_id=1, priority_value=1)
+    high = make_item(item_id=2, priority_value=3)
+    result = sort_queue([low, high])
+    assert [i.item_id for i in result] == [2, 1]
+
+
+def test_sort_queue_run_now_still_leads_higher_rank():
+    """A prepend/run-now item stays above plain items regardless of rank."""
+    run_now = make_item(item_id=1, priority=True, priority_value=1)
+    ranked = make_item(item_id=2, priority_value=9)
+    result = sort_queue([ranked, run_now])
+    assert [i.item_id for i in result] == [1, 2]
+
+
+def test_sort_queue_submission_serial_breaks_equal_rank():
+    a = make_item(item_id=10, priority_value=2)
+    b = make_item(item_id=7, priority_value=2)
+    result = sort_queue([a, b])
+    assert [i.item_id for i in result] == [7, 10]
+
+
+def test_sort_queue_mixed_ranks_full_order():
+    items = [
+        make_item(item_id=1, priority_value=1),
+        make_item(item_id=2, priority=True, priority_value=1),
+        make_item(item_id=3, priority_value=2),
+        make_item(item_id=4, priority_value=9),
+        make_item(item_id=5, priority_value=2),
+    ]
+    result = sort_queue(items)
+    assert [i.item_id for i in result] == [2, 4, 3, 5, 1]
+
+
 # ---------------------------------------------------------------------------
 # priority_count
 # ---------------------------------------------------------------------------

@@ -29,6 +29,25 @@ async def test_enqueue_prepend_goes_to_front(qm):
 
 
 @pytest.mark.asyncio
+async def test_enqueue_orders_by_priority_value(qm):
+    """Higher priority_value items are dequeued first; equal ranks stay FIFO."""
+    a = await qm.enqueue(QueueItem(params=make_params(), priority_value=1))
+    c = await qm.enqueue(QueueItem(params=make_params(), priority_value=2))
+    b = await qm.enqueue(QueueItem(params=make_params(), priority_value=1))
+    items = await qm.next_pending_batch_window(0)
+    assert [i.item_id for i in items] == [c.item_id, a.item_id, b.item_id]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_higher_priority_runs_after_run_now_block(qm):
+    """A high-ranked plain item never jumps ahead of a run-now item."""
+    run_now = await qm.enqueue(QueueItem(params=make_params(), priority_value=1), prepend=True)
+    high = await qm.enqueue(QueueItem(params=make_params(), priority_value=9))
+    items = await qm.next_pending_batch_window(0)
+    assert [i.item_id for i in items] == [run_now.item_id, high.item_id]
+
+
+@pytest.mark.asyncio
 async def test_cancel_pending_item(qm):
     item = await qm.enqueue(QueueItem(params=make_params()))
     result = await qm.cancel_item(item.item_id)

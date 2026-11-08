@@ -3,7 +3,8 @@
 const UI_STATE_KEY = 'diffusers-ui:app-state';
 const UI_STATE_SCALARS = [
   'prompt', 'negativePrompt', 'seed', 'width', 'height', 'steps', 'cfg',
-  'cfgRescale', 'sampler', 'predictionType', 'batchCount', 'autoSelectLatest',
+  'cfgRescale', 'sampler', 'predictionType', 'batchCount', 'enqueuePriority',
+  'autoSelectLatest',
   'showPreview', 'showInfoOverlay', 'lockAspectRatio', 'selectedAspectRatio',
   'sourceStrength', 'activeTab', 'localScanPath', 'modelKey', 'targetBoardId',
 ];
@@ -23,6 +24,7 @@ function app() {
     predictionType: 'default',
     modelKey: '',
     batchCount: 1,
+    enqueuePriority: 1,        // queue ordering rank for new submissions (higher = earlier)
     targetBoardId: null,
     _galleries: [],
 
@@ -330,6 +332,7 @@ function app() {
       }
 
       this.batchCount = Math.max(1, parseInt(this.batchCount) || 1);
+      this.enqueuePriority = Math.max(1, parseInt(this.enqueuePriority) || 1);
       if (this.lockAspectRatio) this._aspectRatioValue = this.width / this.height;
       this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
     },
@@ -340,6 +343,7 @@ function app() {
         width: this.width, height: this.height, steps: this.steps, cfg: this.cfg,
         cfgRescale: this.cfgRescale, sampler: this.sampler,
         predictionType: this.predictionType, batchCount: this.batchCount,
+        enqueuePriority: this.enqueuePriority,
         autoSelectLatest: this.autoSelectLatest, showPreview: this.showPreview,
         showInfoOverlay: this.showInfoOverlay, lockAspectRatio: this.lockAspectRatio,
         selectedAspectRatio: this.selectedAspectRatio, sourceStrength: this.sourceStrength,
@@ -547,6 +551,7 @@ function app() {
         model_key: this.modelKey,
         board_id: this.targetBoardId || this._currentBoardId,
         count: this.batchCount,
+        priority: this.enqueuePriority ?? 1,
       };
       if (this.sourceImage) {
         batch.init_image = this.sourceImage.name;

@@ -38,6 +38,8 @@ class PersistedQueueItem(Base):
     error = Column(String, nullable=True)
 
     priority = Column(Boolean, nullable=False, default=False)
+    # Ordering rank (higher = earlier); does not affect the run-now block.
+    priority_value = Column(Integer, nullable=False, default=1)
 
     # LoRA metadata (JSON-encoded lists for backward compat)
     lora_keys = Column(String, nullable=True)       # JSON-encoded list of filenames

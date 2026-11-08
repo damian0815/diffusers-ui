@@ -40,6 +40,7 @@ class BatchParams(BaseModel):
     crop_height: float = 0.0
     lora_keys: list[str] = []
     lora_strengths: list[float] = []
+    priority: int = 1  # queue ordering rank: higher renders/processed earlier; serial breaks ties
 
 
 class EnqueueRequest(BaseModel):
@@ -188,6 +189,7 @@ def _parse_enqueue_request_annoying(body: dict) -> tuple[BatchParams, bool]:
     sampler               = str((denoise_node or {}).get("scheduler", "euler_a"))
     board_id              = str(((canvas_node or {}).get("board") or {}).get("board_id"))
     model_key             = _extract_model_key((model_node or {}).get("model"))
+    priority              = int(batch.get("priority", 1))
 
     try:
         batch_params = BatchParams(
@@ -202,6 +204,7 @@ def _parse_enqueue_request_annoying(body: dict) -> tuple[BatchParams, bool]:
             sampler=sampler,
             model_key=model_key,
             board_id=board_id,
+            priority=priority,
         )
     except Exception as exc:
         raise HTTPException(
@@ -277,7 +280,7 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
             lora_keys=batch.lora_keys,
             lora_strengths=batch.lora_strengths,
         )
-        item = QueueItem(params=params, priority=prepend)
+        item = QueueItem(params=params, priority=prepend, priority_value=batch.priority)
         await queue.enqueue(item, prepend=prepend)
 
         item_dict = _queue_item_to_image_dict(item, model_name)
@@ -500,7 +503,7 @@ async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: 
     item = queue.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Queue item {item_id} not found")
-    new_item = QueueItem(params=item.params, priority=prepend)
+    new_item = QueueItem(params=item.params, priority=prepend, priority_value=item.priority_value)
     await queue.enqueue(new_item, prepend=prepend)
 
     registry    = request.app.state.registry
@@ -568,5 +571,6 @@ def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
         "gen_seq": None,  # legacy alias
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "priority": item.priority,
+        "priority_value": item.priority_value,
         "tags": [],
     }

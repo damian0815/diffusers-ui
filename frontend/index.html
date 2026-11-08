@@ -94,6 +94,10 @@
             <input type="number" x-model.number="batchCount" min="1" max="100" step="1"
                    style="width:56px;text-align:center" title="Batch count">
           </div>
+          <div class="field batch-count-field" title="Queue priority: higher numbers move these generations earlier in the queue (ties keep submission order)">
+            <input type="number" x-model.number="enqueuePriority" min="1" step="1"
+                   style="width:56px;text-align:center" title="Queue priority (default 1)">
+          </div>
           <span class="batch-hint-pill"
                 x-show="_totalGenCount() > 1"
                 x-text="`${_totalGenCount()} gens`"
@@ -927,6 +931,9 @@
               </div>
               <div class="queue-id-col">
                 <span class="queue-id" x-text="`#${item.item_id}`"></span>
+                <span class="queue-priority-rank" x-show="item.priority_value && item.priority_value !== 1"
+                      x-text="`P${item.priority_value}`"
+                      title="Queue priority (higher = earlier)"></span>
                 <span class="queue-created" x-show="item.created_at" x-text="timeAgo(item.created_at)"></span>
               </div>
               <div class="queue-model-col">

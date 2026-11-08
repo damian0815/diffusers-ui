@@ -19,6 +19,7 @@ from backend.domain import _init_counter
 from backend.gallery.db import init_db, AsyncSessionLocal
 from backend.gallery.models import Gallery
 from backend.queue.manager import QueueManager
+from backend.queue.listing import sort_queue
 from backend.queue.store import QueueStore
 from backend.model_registry.registry import ModelRegistry
 from backend.model_registry.loader import PipelineLoader
@@ -136,11 +137,14 @@ async def _restore_queue() -> None:
             return
 
         pending_count = 0
+        pending_items = [i for i in items if i.status.value == "pending"]
+        # Restore the deque in render order (run-now first, then priority
+        # rank, then serial) so the worker picks items up in that order too.
+        for item in sort_queue(pending_items):
+            queue_manager._queue.append(item)
+            pending_count += 1
         for item in items:
             queue_manager._all_items[item.item_id] = item
-            if item.status.value == "pending":
-                queue_manager._queue.append(item)
-                pending_count += 1
 
         # Prevent future IDs from colliding with restored IDs.
         max_id = max(i.item_id for i in items)
