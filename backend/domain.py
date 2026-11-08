@@ -130,6 +130,10 @@ class QueueItem:
     # "jump the queue entirely" switch; this only ranks normal queuing.)
     priority: bool = False
     priority_value: int = 1
+
+    def __post_init__(self):
+        if self.priority_value is None:
+            self.priority_value = 1
     created_at: datetime | None = field(default_factory=datetime.utcnow)
 
 

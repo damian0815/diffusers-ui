@@ -64,16 +64,25 @@ class QueueManager:
         return item
 
     def _insert_in_priority_order(self, item: QueueItem) -> None:
-        """Insert a non-prepend item so the deque stays ordered by
-        (descending priority_value, ascending item_id).  Run-now (prepend)
-        items hold the leading block and are never reordered.  Higher
-        priority_value therefore lands closer to the head, meaning the
-        worker's head-first pickup processes items in priority order."""
+        """Insert an item so the deque stays ordered by
+        (descending priority_value, ascending item_id) within each block.
+
+        Run-now (priority=True) items hold the leading block; regular items
+        (priority=False) the trailing block.  Higher priority_value lands
+        closer to the head, so the worker's head-first pickup processes
+        items in priority order.
+        """
         insert_at = len(self._queue)
         for idx in range(len(self._queue)):
             other = self._queue[idx]
-            if other.priority:
-                continue  # run-now block stays ahead
+            # Items in different blocks: priority items stay ahead.
+            if other.priority and not item.priority:
+                continue  # skip past run-now block
+            if not other.priority and item.priority:
+                # Reached the regular block while inserting a priority item.
+                insert_at = idx
+                break
+            # Same block: sort by priority_value descending.
             if other.priority_value < item.priority_value:
                 insert_at = idx
                 break
