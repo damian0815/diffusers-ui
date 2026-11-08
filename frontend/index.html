@@ -918,9 +918,6 @@
       <div x-show="queueDetails.length > 0" class="queue-list">
         <template x-for="(item, idx) in queueDetails" :key="item.item_id">
           <div>
-            <div x-show="isLastPriorityRow(idx)" class="queue-priority-divider">
-              <span class="queue-priority-label">Prepend</span>
-            </div>
             <div class="queue-row" :class="`status-${item.status}`"
                  x-transition:enter="row-enter"
                  x-transition:enter-start="row-enter-start"
@@ -963,6 +960,11 @@
                         @click="resubmitItem(item.item_id)"
                         title="Resubmit">↻</button>
               </div>
+            </div>
+            <!-- Prepend divider sits at the BOTTOM of the last prepended row:
+                 prepended items appear above the divider. -->
+            <div x-show="isLastPriorityRow(idx)" class="queue-priority-divider">
+              <span class="queue-priority-label">⬆️ Prepend</span>
             </div>
           </div>
         </template>

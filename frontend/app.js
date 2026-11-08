@@ -1305,9 +1305,10 @@ function app() {
       this.loadQueuePage({ mode: 'reset' });
     },
 
-    // Show the "Prepend" divider after the last priority row.
+    // Show the "Prepend" divider at the bottom of the last prepended row —
+    // only when regular (non-prepended) rows follow it.
     isLastPriorityRow(idx) {
-      return idx === this.queuePriorityCount - 1 && idx > 0;
+      return idx === this.queuePriorityCount - 1 && idx < this.queueDetails.length - 1;
     },
 
     // Client-side copy of the backend filter — used by the queue_item_enqueued
