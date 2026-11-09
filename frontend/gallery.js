@@ -12,6 +12,8 @@ function gallery() {
     sortDir: 'desc',
     starredFirst: false,
     showOptions: false,
+    boardDropdownOpen: false,
+    moveBoardDropdownOpen: false,
     offset: 0,
     limit: 50,
     total: 0,
@@ -40,7 +42,7 @@ function gallery() {
     regenModal: {
       open: false,
       selectedModelKey: null,
-      prepend: false,
+      priority: false,   // checked → enqueue at rank 2 (ahead of rank-1 work)
       _enqueuing: false,
       _progress: null,   // null | { done: 0, total: 0 }
     },
@@ -580,7 +582,7 @@ function gallery() {
 
     openRegenerateModal() {
       this.ctxMenu.open = false;
-      this.regenModal = { open: true, selectedModelKey: null, prepend: false, _enqueuing: false, _progress: null };
+      this.regenModal = { open: true, selectedModelKey: null, priority: false, _enqueuing: false, _progress: null };
       window.dispatchEvent(new CustomEvent('request-models-list'));
     },
 
@@ -592,7 +594,9 @@ function gallery() {
     async confirmRegenerate() {
       const names = [...this.selectedImageNames];
       const modelKey = this.regenModal.selectedModelKey;
-      const prepend = this.regenModal.prepend;
+      // The modal checkbox is the ⏫ prepend option: rank 2 (min) so these
+      // queue ahead of plain rank-1 work. Ordering uses batch.priority only.
+      const priority = this.regenModal.priority ? 2 : 1;
       if (!names.length || !modelKey) return;
 
       this.regenModal._enqueuing = true;
@@ -618,6 +622,7 @@ function gallery() {
             model_key: modelKey,
             board_id: this.selectedBoardId,
             count: 1,
+            priority: priority,
           };
           if (meta.source_image) {
             batch.init_image = meta.source_image;
@@ -633,7 +638,7 @@ function gallery() {
           await fetch('/api/v1/queue/default/enqueue_batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prepend, batch }),
+            body: JSON.stringify({ batch }),
           });
 
           this.regenModal._progress.done++;
@@ -700,13 +705,19 @@ function gallery() {
     _handleWsEvent(msg) {
       const { event, data } = msg;
       if (event === 'board_created') {
-        if (!this.galleries.some(g => g.board_id === data.board_id))
+        if (!this.galleries.some(g => g.board_id === data.board_id)) {
+          data.image_count = data.image_count ?? 0;
+          data.latest_image = data.latest_image ?? null;
+          data.latest_image_name = data.latest_image_name ?? data.latest_image ?? null;
           this.galleries.push(data);
+          this._notifyGalleriesUpdated();
+        }
       } else if (event === 'board_renamed') {
         const g = this.galleries.find(g => g.board_id === data.board_id);
-        if (g) g.board_name = data.board_name;
+        if (g) { g.board_name = data.board_name; this._notifyGalleriesUpdated(); }
       } else if (event === 'board_deleted') {
         this.galleries = this.galleries.filter(g => g.board_id !== data.board_id);
+        this._notifyGalleriesUpdated();
         if (this.selectedBoardId === data.board_id) {
           this.selectedBoardId = this.galleries[0]?.board_id ?? null;
           this.$dispatch('select-image', { imageName: null });
@@ -715,6 +726,13 @@ function gallery() {
           this.resetAndLoad();
         }
       } else if (event === 'image_created') {
+        const g = this.galleries.find(x => x.board_id === data.board_id);
+        if (g) {
+          g.image_count = (g.image_count || 0) + 1;
+          g.latest_image = data.image_name;
+          g.latest_image_name = data.image_name;
+        }
+        this._notifyGalleriesUpdated();
         if (data.board_id === this.selectedBoardId &&
             !this.images.some(i => i.image_name === data.image_name)) {
           this._insertImageInOrder(data);
@@ -722,6 +740,15 @@ function gallery() {
           this.total += 1;
         }
       } else if (event === 'image_deleted') {
+        const gDel = this.galleries.find(x => x.board_id === data.board_id);
+        if (gDel) {
+          gDel.image_count = Math.max(0, (gDel.image_count || 0) - 1);
+          if (gDel.latest_image === data.image_name || gDel.latest_image_name === data.image_name) {
+            gDel.latest_image = null;
+            gDel.latest_image_name = null;
+          }
+          this._notifyGalleriesUpdated();
+        }
         if (this.images.some(i => i.image_name === data.image_name)) {
           this.images = this.images.filter(i => i.image_name !== data.image_name);
           this.offset = Math.max(0, this.offset - 1);
@@ -733,6 +760,25 @@ function gallery() {
           }
         }
       } else if (event === 'images_moved') {
+        const srcG = this.galleries.find(x => x.board_id === data.source_board_id);
+        if (srcG) {
+          const moved = (data.image_names || []).length;
+          srcG.image_count = Math.max(0, (srcG.image_count || 0) - moved);
+          if ((data.image_names || []).includes(srcG.latest_image) || (data.image_names || []).includes(srcG.latest_image_name)) {
+            srcG.latest_image = null;
+            srcG.latest_image_name = null;
+          }
+        }
+        const tgtG = this.galleries.find(x => x.board_id === data.target_board_id);
+        if (tgtG) {
+          const moved = (data.image_names || []).length;
+          tgtG.image_count = (tgtG.image_count || 0) + moved;
+          if (!tgtG.latest_image && moved > 0) {
+            tgtG.latest_image = data.image_names[0];
+            tgtG.latest_image_name = data.image_names[0];
+          }
+        }
+        this._notifyGalleriesUpdated();
         // Another tab moved images out of (or into) this gallery
         if (data.source_board_id === this.selectedBoardId) {
           const movedSet = new Set(data.image_names);

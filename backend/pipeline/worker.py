@@ -187,19 +187,17 @@ class PipelineWorker:
             pivot = items[0]
 
             crit = get_critical_params(pivot.params)
+            pivot_rank = pivot.priority_value
             max_bs = self._mem_advisor.get_max_batch_size(crit.width * crit.height)
             batch = [pivot]
             if max_bs > 1:
-                if pivot.priority:
-                    rest = await self._queue.dequeue_matching(
-                        lambda item, _crit=crit: item.priority and get_critical_params(item.params) == _crit,
-                        max_bs - 1,
-                    )
-                else:
-                    rest = await self._queue.dequeue_matching(
-                        lambda item, _crit=crit: not item.priority and get_critical_params(item.params) == _crit,
-                        max_bs - 1,
-                    )
+                # Chunk by priority: a batch never mixes priority levels, so
+                # only items sharing the pivot's exact rank can join it.
+                rest = await self._queue.dequeue_matching(
+                    lambda item, _crit=crit, _rank=pivot_rank:
+                        item.priority_value == _rank and get_critical_params(item.params) == _crit,
+                    max_bs - 1,
+                )
                 batch.extend(rest)
 
             if not self._running:
@@ -853,8 +851,8 @@ class PipelineWorker:
             len(batch), len(first_half), len(second_half),
         )
 
-        # Requeue second half at front.
-        await self._queue.requeue_items(second_half, prepend=True)
+        # Requeue the second half (re-inserted at its priority rank).
+        await self._queue.requeue_items(second_half)
 
         # Immediately retry first half.
         _ = await self._run_batch(first_half)

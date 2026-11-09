@@ -424,6 +424,24 @@ select option { background: var(--surface); }
    (placed after .icon-btn.sm so the padding/width overrides win) */
 .generate-row > .btn-primary { flex: 0 0 140px; }
 .generate-row > .icon-btn    { width: 38px; padding: 6px 0; }
+
+/* ⏫ prepend button with its bound priority-rank input stacked below it.
+   The input value is the rank the ⏫ enqueue uses (min 2; see
+   app._prependPriorityValue). */
+.prepend-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 38px;
+}
+.prepend-stack .generate-priority { width: 38px; padding: 6px 0; }
+.prepend-priority {
+  width: 38px;
+  padding: 2px 0;
+  text-align: center;
+  font-size: 12px;
+}
 .ar-select { font-size: 12px; padding: 5px 26px 5px 8px; color: var(--text-2); }
 .ar-lock { align-self: flex-end; }
 .swap-btn { align-self: flex-end; font-size: 16px; padding: 5px 8px; }
@@ -2123,3 +2141,28 @@ select option { background: var(--surface); }
   font-size: 12px;
   color: var(--text-3);
 }
+/* Board selection dropdown with thumbnails */
+.board-dropdown { position: relative; display: inline-block; width: 100%; }
+.board-dropdown-trigger {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border: 1px solid var(--border, #444); border-radius: 6px;
+  background: var(--panel, #222); color: inherit; cursor: pointer; text-align: left;
+}
+.board-dropdown-thumb { width: 24px; height: 24px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+.board-dropdown-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-dropdown-caret { opacity: 0.6; }
+.board-dropdown-menu {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 1000;
+  margin-top: 4px; padding: 4px; border: 1px solid var(--border, #444);
+  border-radius: 6px; background: var(--panel, #222);
+  max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+}
+.board-dropdown-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border: none; border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer; text-align: left;
+}
+.board-dropdown-item:hover { background: rgba(255,255,255,0.08); }
+.board-dropdown-item.active { background: rgba(100,140,255,0.25); }
+.board-dropdown-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-dropdown-item-count { opacity: 0.6; font-size: 0.85em; }

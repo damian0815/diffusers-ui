@@ -202,27 +202,27 @@ def test_paginate_limit_zero_empty_items():
 # sort_queue
 # ---------------------------------------------------------------------------
 
-def test_sort_queue_priority_before_regular():
-    regular = make_item(item_id=1, priority=False)
-    priority = make_item(item_id=2, priority=True)
-    result = sort_queue([regular, priority])
+def test_sort_queue_higher_rank_before_lower():
+    low = make_item(item_id=1, priority_value=1)
+    high = make_item(item_id=2, priority_value=2)
+    result = sort_queue([low, high])
     assert [i.item_id for i in result] == [2, 1]
 
 
-def test_sort_queue_item_id_ascending_within_groups():
+def test_sort_queue_item_id_ascending_within_rank():
     items = [
-        make_item(item_id=10, priority=False),
-        make_item(item_id=5, priority=True),
-        make_item(item_id=7, priority=True),
-        make_item(item_id=1, priority=False),
+        make_item(item_id=10, priority_value=1),
+        make_item(item_id=5, priority_value=2),
+        make_item(item_id=7, priority_value=2),
+        make_item(item_id=1, priority_value=1),
     ]
     result = sort_queue(items)
     assert [i.item_id for i in result] == [5, 7, 1, 10]
 
 
 def test_sort_queue_stable_for_equal_keys():
-    a = make_item(item_id=3, priority=True)
-    b = make_item(item_id=3, priority=True)
+    a = make_item(item_id=3)
+    b = make_item(item_id=3)
     result = sort_queue([b, a])
     assert result == [b, a]
 
@@ -232,14 +232,6 @@ def test_sort_queue_higher_priority_value_first():
     high = make_item(item_id=2, priority_value=3)
     result = sort_queue([low, high])
     assert [i.item_id for i in result] == [2, 1]
-
-
-def test_sort_queue_run_now_still_leads_higher_rank():
-    """A prepend/run-now item stays above plain items regardless of rank."""
-    run_now = make_item(item_id=1, priority=True, priority_value=1)
-    ranked = make_item(item_id=2, priority_value=9)
-    result = sort_queue([ranked, run_now])
-    assert [i.item_id for i in result] == [1, 2]
 
 
 def test_sort_queue_submission_serial_breaks_equal_rank():
@@ -252,9 +244,9 @@ def test_sort_queue_submission_serial_breaks_equal_rank():
 def test_sort_queue_mixed_ranks_full_order():
     items = [
         make_item(item_id=1, priority_value=1),
-        make_item(item_id=2, priority=True, priority_value=1),
+        make_item(item_id=2, priority_value=9),
         make_item(item_id=3, priority_value=2),
-        make_item(item_id=4, priority_value=9),
+        make_item(item_id=4, priority_value=5),
         make_item(item_id=5, priority_value=2),
     ]
     result = sort_queue(items)
@@ -266,14 +258,14 @@ def test_sort_queue_mixed_ranks_full_order():
 # ---------------------------------------------------------------------------
 
 def test_priority_count_zero_when_none():
-    items = [make_item(item_id=1, priority=False), make_item(item_id=2, priority=False)]
+    items = [make_item(item_id=1, priority_value=1), make_item(item_id=2, priority_value=1)]
     assert priority_count(items) == 0
 
 
-def test_priority_count_some():
+def test_priority_count_counts_above_default_rank():
     items = [
-        make_item(item_id=1, priority=False),
-        make_item(item_id=2, priority=True),
-        make_item(item_id=3, priority=True),
+        make_item(item_id=1, priority_value=1),
+        make_item(item_id=2, priority_value=2),
+        make_item(item_id=3, priority_value=7),
     ]
     assert priority_count(items) == 2

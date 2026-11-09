@@ -172,7 +172,6 @@ async def client(mock_pipeline, tmp_path, monkeypatch):
 def make_enqueue_body(**overrides) -> dict:
     """Build a valid enqueue_batch request body."""
     defaults = dict(
-        prepend=False,
         batch=dict(
             prompt="a beautiful landscape",
             negative_prompt="",

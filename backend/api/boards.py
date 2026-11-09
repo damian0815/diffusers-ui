@@ -16,8 +16,11 @@ async def list_boards(session=Depends(get_session)):
     """Return all galleries (boards)."""
     service = GalleryService(session)
     galleries = await service.list_galleries()
-    dicts = [_gallery_to_dict(g, count=await service.count_images_in_gallery(g.board_id))
-             for g in galleries]
+    dicts = []
+    for g in galleries:
+        count = await service.count_images_in_gallery(g.board_id)
+        latest = await service.get_latest_image_in_gallery(g.board_id)
+        dicts.append(_gallery_to_dict(g, count=count, latest_image=latest))
     #logger.warning(f"list_boards() returning dicts: {dicts}")
     return dicts
 
@@ -78,9 +81,15 @@ async def delete_board(
     return {"deleted": board_id, "deleted_images": deleted_images}
 
 
-def _gallery_to_dict(gallery, count: int=None) -> dict:
-    return {
+def _gallery_to_dict(gallery, count: int=None, latest_image: str=None) -> dict:
+    d = {
         "board_id": gallery.board_id,
         "board_name": gallery.name,
         "created_at": gallery.created_at.strftime("%Y-%m-%d %H:%M:%S.%f") if gallery.created_at else None,
-    } | ({ "image_count": count } if count is not None else {})
+    }
+    if count is not None:
+        d["image_count"] = count
+    if latest_image is not None:
+        d["latest_image"] = latest_image
+        d["latest_image_name"] = latest_image
+    return d

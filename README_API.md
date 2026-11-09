@@ -241,7 +241,6 @@ Enqueue one or more generation jobs. Accepts both the native flat format and the
 **Body (native format)**
 ```json
 {
-  "prepend": false,
   "batch": {
     "prompt": "a cat",
     "negative_prompt": "",
@@ -273,9 +272,10 @@ When `count > 1` and `seed >= 0`, successive items auto-increment the seed.
 When `seed == -1`, each item gets an independent random seed.
 
 `batch.priority` is an ordering rank: higher numbers render/process earlier
-(within equal rank, submission order is kept). Default `1`. Items enqueued
-with `prepend: true` always run ahead of everything ranked, regardless of
-`priority`. The legacy graph format accepts `batch.priority` the same way.
+(within equal rank, submission order is kept). Default `1`. There is no
+separate "prepend" flag — rank drives all ordering (rank 2 and above run
+ahead of default-ranked work; `move_front` bumps a pending item's rank to
+max+1). The legacy graph format accepts `batch.priority` the same way.
 
 **Response**
 ```json
@@ -365,7 +365,8 @@ Cancel a pending queue item.
 
 ### `PUT /i/{item_id}/move_front`
 
-Move a pending item to the front of the queue.
+Move a pending item to the front of the queue by bumping its `priority_value`
+to max+1 (above every other tracked item).
 
 **Response**
 ```json
@@ -374,11 +375,10 @@ Move a pending item to the front of the queue.
 
 Returns 400 if the item is not pending.
 
-### `POST /i/{item_id}/resubmit?prepend=true`
+### `POST /i/{item_id}/resubmit`
 
-Clone a queue item (any status) and re-enqueue it.
-
-**Query** `prepend` (bool, default `true`)
+Clone a queue item (any status) and re-enqueue it at the same priority rank.
+Use `move_front` afterwards to jump it ahead of the queue.
 
 **Response**
 ```json

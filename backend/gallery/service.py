@@ -51,6 +51,11 @@ class GalleryService:
         )
         return result.scalar_one()
 
+    async def get_latest_image_in_gallery(self, board_id: str) -> str | None:
+        """Return the image_name of the most recently created image in the board."""
+        names = await self.list_image_names(board_id)
+        return names[0] if names else None
+
     async def get_gallery(self, board_id: str) -> Gallery | None:
         result = await self._session.execute(
             select(Gallery).where(Gallery.board_id == board_id)

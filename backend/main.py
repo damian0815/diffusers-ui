@@ -138,8 +138,8 @@ async def _restore_queue() -> None:
 
         pending_count = 0
         pending_items = [i for i in items if i.status.value == "pending"]
-        # Restore the deque in render order (run-now first, then priority
-        # rank, then serial) so the worker picks items up in that order too.
+        # Restore the deque in render order (priority rank descending, then
+        # serial) so the worker picks items up in that order too.
         for item in sort_queue(pending_items):
             queue_manager._queue.append(item)
             pending_count += 1

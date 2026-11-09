@@ -88,13 +88,18 @@
                   :disabled="!isGenerating"
                   title="Cancel current generation">✕</button>
           <!-- pause/resume button is in the Queue view header -->
-          <button class="icon-btn generate-priority" @click="generate(true)"
-                  :disabled="isEnqueuing"
-                  :class="{'is-loading': enqueuingPrepend}"
-                  title="Front of queue  ·  ⌘⇧↩">⏫</button>
-          <div class="field batch-count-field" title="Queue priority: higher numbers move these generations earlier in the queue (ties keep submission order)">
-            <input type="number" x-model.number="enqueuePriority" min="1" step="1"
-                   style="width:56px;text-align:center" title="Queue priority (default 1)">
+          <!-- ⏫ Prepend = enqueue at the rank shown in the bound input
+               directly below (min 2 → always ahead of plain rank-1 work).
+               The plain Generate button always enqueues at rank 1. -->
+          <div class="prepend-stack">
+            <button class="icon-btn generate-priority" @click="generate(true)"
+                    :disabled="isEnqueuing"
+                    :class="{'is-loading': enqueuingPrepend}"
+                    title="Prepend — enqueue at the priority shown below (min 2)  ·  ⌘⇧↩">⏫</button>
+            <input class="prepend-priority" type="number" x-model.number="prependPriority"
+                   @change="prependPriority = _prependPriorityValue()"
+                   min="2" step="1"
+                   title="⏫ prepend priority: this generation's rank when enqueued with the button above (minimum 2)">
           </div>
           <span class="batch-hint-pill"
                 x-show="_totalGenCount() > 1"
@@ -129,12 +134,25 @@
 
            <div class="field-group" style="margin-top:12px">
               <label class="field-label">Target Gallery</label>
-             <select x-model="targetBoardId">
-               <option value="" disabled selected>Select a gallery...</option>
-               <template x-for="g in _galleries" :key="g.board_id">
-                 <option :value="g.board_id" x-text="g.board_name"></option>
-               </template>
-             </select>
+             <div class="board-dropdown" @click.outside="targetBoardDropdownOpen = false">
+               <button type="button" class="board-dropdown-trigger" @click="targetBoardDropdownOpen = !targetBoardDropdownOpen">
+                 <template x-if="_galleries.find(g => g.board_id === targetBoardId)?.latest_image || _galleries.find(g => g.board_id === targetBoardId)?.latest_image_name">
+                   <img class="board-dropdown-thumb" :src="`/api/v1/images/i/${_galleries.find(g => g.board_id === targetBoardId)?.latest_image || _galleries.find(g => g.board_id === targetBoardId)?.latest_image_name}/thumbnail`" alt="">
+                 </template>
+                 <span class="board-dropdown-label" x-text="_galleries.find(g => g.board_id === targetBoardId) ? `${_galleries.find(g => g.board_id === targetBoardId).board_name} (${_galleries.find(g => g.board_id === targetBoardId).image_count || 0})` : 'Select a gallery...'"></span>
+                 <span class="board-dropdown-caret">▾</span>
+               </button>
+               <div class="board-dropdown-menu" x-show="targetBoardDropdownOpen" x-transition>
+                 <button type="button" class="board-dropdown-item" :class="{active: !targetBoardId}" @click="targetBoardId = null; targetBoardDropdownOpen = false">Select a gallery...</button>
+                 <template x-for="g in _galleries" :key="g.board_id">
+                   <button type="button" class="board-dropdown-item" :class="{active: g.board_id === targetBoardId}" @click="targetBoardId = g.board_id; targetBoardDropdownOpen = false">
+                     <img x-show="g.latest_image || g.latest_image_name" class="board-dropdown-thumb" :src="`/api/v1/images/i/${g.latest_image || g.latest_image_name}/thumbnail`" alt="">
+                     <span class="board-dropdown-item-name" x-text="g.board_name"></span>
+                     <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
+                   </button>
+                 </template>
+               </div>
+             </div>
            </div>
 
           <div id="queue-status">
@@ -568,11 +586,24 @@
       <div class="panel-inner">
         <div id="gallery-header">
           <div class="row">
-            <select id="board-select" x-model="selectedBoardId" @change="onBoardChange()">
-              <template x-for="g in galleries" :key="g.board_id">
-                <option :value="g.board_id" x-text="g.board_name"></option>
-              </template>
-            </select>
+            <div id="board-select" class="board-dropdown" @click.outside="boardDropdownOpen = false">
+              <button type="button" class="board-dropdown-trigger" @click="boardDropdownOpen = !boardDropdownOpen">
+                <template x-if="galleries.find(g => g.board_id === selectedBoardId)?.latest_image || galleries.find(g => g.board_id === selectedBoardId)?.latest_image_name">
+                  <img class="board-dropdown-thumb" :src="`/api/v1/images/i/${galleries.find(g => g.board_id === selectedBoardId)?.latest_image || galleries.find(g => g.board_id === selectedBoardId)?.latest_image_name}/thumbnail`" alt="">
+                </template>
+                <span class="board-dropdown-label" x-text="`${galleries.find(g => g.board_id === selectedBoardId)?.board_name || 'Select gallery'} (${galleries.find(g => g.board_id === selectedBoardId)?.image_count || 0})`"></span>
+                <span class="board-dropdown-caret">▾</span>
+              </button>
+              <div class="board-dropdown-menu" x-show="boardDropdownOpen" x-transition>
+                <template x-for="g in galleries" :key="g.board_id">
+                  <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedBoardId}" @click="selectedBoardId = g.board_id; boardDropdownOpen = false; onBoardChange()">
+                    <img x-show="g.latest_image || g.latest_image_name" class="board-dropdown-thumb" :src="`/api/v1/images/i/${g.latest_image || g.latest_image_name}/thumbnail`" alt="">
+                    <span class="board-dropdown-item-name" x-text="g.board_name"></span>
+                    <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
             <button class="icon-btn" title="New gallery" @click="createGallery()">+</button>
             <button class="icon-btn" title="Gallery options"
                     @click="showOptions = !showOptions">⚙</button>
@@ -705,12 +736,24 @@
           <div class="modal-body">
             <!-- Dropdown Select inside a conditional wrapper -->
             <div x-show="galleries.filter(g => g.board_id !== selectedBoardId).length > 0">
-              <select class="modal-select" x-model="moveModal.targetBoardId">
-                <option value="" disabled selected>Select destination gallery...</option>
-                <template x-for="g in galleries.filter(g => g.board_id !== selectedBoardId)" :key="g.board_id">
-                  <option :value="g.board_id" x-text="g.board_name"></option>
-                </template>
-              </select>
+              <div class="board-dropdown" @click.outside="moveBoardDropdownOpen = false">
+                <button type="button" class="board-dropdown-trigger" @click="moveBoardDropdownOpen = !moveBoardDropdownOpen">
+                  <template x-if="galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image || galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image_name">
+                    <img class="board-dropdown-thumb" :src="`/api/v1/images/i/${galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image || galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image_name}/thumbnail`" alt="">
+                  </template>
+                  <span class="board-dropdown-label" x-text="galleries.find(g => g.board_id === moveModal.targetBoardId) ? `${galleries.find(g => g.board_id === moveModal.targetBoardId).board_name} (${galleries.find(g => g.board_id === moveModal.targetBoardId).image_count || 0})` : 'Select destination gallery...'"></span>
+                  <span class="board-dropdown-caret">▾</span>
+                </button>
+                <div class="board-dropdown-menu" x-show="moveBoardDropdownOpen" x-transition>
+                  <template x-for="g in galleries.filter(g => g.board_id !== selectedBoardId)" :key="g.board_id">
+                    <button type="button" class="board-dropdown-item" :class="{active: g.board_id === moveModal.targetBoardId}" @click="moveModal.targetBoardId = g.board_id; moveBoardDropdownOpen = false">
+                      <img x-show="g.latest_image || g.latest_image_name" class="board-dropdown-thumb" :src="`/api/v1/images/i/${g.latest_image || g.latest_image_name}/thumbnail`" alt="">
+                      <span class="board-dropdown-item-name" x-text="g.board_name"></span>
+                      <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
             </div>
 
             <!-- Fallback when no other galleries exist -->
@@ -773,8 +816,8 @@
                 <p x-show="availableModels.length === 0" class="hint" style="margin-top: 4px;">No models registered.</p>
               </div>
               <label class="checkbox-label">
-                <input type="checkbox" x-model="regenModal.prepend">
-                Prepend to queue (run first)
+                <input type="checkbox" x-model="regenModal.priority">
+                Prepend to queue (priority 2)
               </label>
             </div>
           </div>
@@ -965,10 +1008,11 @@
                         title="Resubmit">↻</button>
               </div>
             </div>
-            <!-- Prepend divider sits at the BOTTOM of the last prepended row:
-                 prepended items appear above the divider. -->
+            <!-- The divider sits at the BOTTOM of the last priority row:
+                 rows ranked above the default (priority_value > 1) appear
+                 above it. -->
             <div x-show="isLastPriorityRow(idx)" class="queue-priority-divider">
-              <span class="queue-priority-label">⬆️ Prepend</span>
+              <span class="queue-priority-label">⬆️ Priority</span>
             </div>
           </div>
         </template>

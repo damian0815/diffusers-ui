@@ -44,7 +44,6 @@ class BatchParams(BaseModel):
 
 
 class EnqueueRequest(BaseModel):
-    prepend: bool = False
     batch: BatchParams
 
 
@@ -116,20 +115,20 @@ def _extract_model_key(model_data: Any) -> str:
 # ---------------------------------------------------------------------------
 # Per-format parsers
 # Precondition:  body is a raw dict parsed from the JSON request body.
-# Postcondition: returns (BatchParams, prepend: bool); raises HTTPException
-#                on unrecoverable parse errors.
+# Postcondition: returns BatchParams; raises HTTPException on unrecoverable
+#                parse errors.
 # ---------------------------------------------------------------------------
 
-def _parse_enqueue_request_clean(body: dict) -> tuple[BatchParams, bool]:
-    """Parse the native flat ``{prepend, batch: {…}}`` format via Pydantic."""
+def _parse_enqueue_request_clean(body: dict) -> BatchParams:
+    """Parse the native flat ``{batch: {…}}`` format via Pydantic."""
     try:
         req = EnqueueRequest.model_validate(body)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors())
-    return req.batch, req.prepend
+    return req.batch
 
 
-def _parse_enqueue_request_annoying(body: dict) -> tuple[BatchParams, bool]:
+def _parse_enqueue_request_annoying(body: dict) -> BatchParams:
     """Parse the legacy InvokeAI graph-format request.
 
     Supports both SD-1/SD-2 (exact node names such as ``sd1_model_loader``,
@@ -144,7 +143,6 @@ def _parse_enqueue_request_annoying(body: dict) -> tuple[BatchParams, bool]:
       model key, board id) are read directly from graph nodes because they
       are never batched and are always present in the node graph.
     """
-    prepend = bool(body.get("prepend", False))
     batch   = body.get("batch", {})
     nodes: dict = batch.get("graph", {}).get("nodes", {})
     data:  list = batch.get("data", [])
@@ -212,7 +210,7 @@ def _parse_enqueue_request_annoying(body: dict) -> tuple[BatchParams, bool]:
             detail=f"Could not parse graph-format request: {exc}",
         )
 
-    return batch_params, prepend
+    return batch_params
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +230,17 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
     (reproducible multi-sample runs).  If ``batch.seed == -1`` every item
     gets its own independent random seed.
 
+    Ordering is driven solely by ``batch.priority`` (an integer rank, default
+    1): higher ranks are processed earlier; ties keep submission order.  A
+    rank of 2 or more puts the item ahead of all default-ranked work.
+
     Returns {"queue_id": str, "items": [<image-record-dict>, ...]}.
     """
     fmt = _detect_request_format(body)
     if fmt == "annoying":
-        batch, prepend = _parse_enqueue_request_annoying(body)
+        batch = _parse_enqueue_request_annoying(body)
     else:
-        batch, prepend = _parse_enqueue_request_clean(body)
+        batch = _parse_enqueue_request_clean(body)
 
     queue    = request.app.state.queue
     registry = request.app.state.registry
@@ -281,8 +283,8 @@ async def enqueue_batch(queue_id: str, request: Request, body: dict = Body(...))
             lora_strengths=batch.lora_strengths,
         )
         _priority = batch.priority if batch.priority is not None else 1
-        item = QueueItem(params=params, priority=prepend or _priority > 1, priority_value=_priority)
-        await queue.enqueue(item, prepend=prepend)
+        item = QueueItem(params=params, priority_value=_priority)
+        await queue.enqueue(item)
 
         item_dict = _queue_item_to_image_dict(item, model_name)
         await broadcaster.broadcast_event("queue_item_enqueued", item_dict)
@@ -516,9 +518,10 @@ async def list_queue(
 
 
 @router.post("/i/{item_id}/resubmit")
-async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: bool = True):
+async def resubmit_item(queue_id: str, item_id: int, request: Request):
     """
-    Create a fresh clone of an existing queue item and enqueue it.
+    Create a fresh clone of an existing queue item and enqueue it at the
+    same priority rank.
     Works on any item, regardless of status (useful for failed/cancelled/completed jobs).
     Returns the new item_id.
     """
@@ -527,8 +530,8 @@ async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: 
     if item is None:
         raise HTTPException(status_code=404, detail=f"Queue item {item_id} not found")
     _priority = item.priority_value if item.priority_value is not None else 1
-    new_item = QueueItem(params=item.params, priority=prepend or _priority > 1, priority_value=_priority)
-    await queue.enqueue(new_item, prepend=prepend)
+    new_item = QueueItem(params=item.params, priority_value=_priority)
+    await queue.enqueue(new_item)
 
     registry    = request.app.state.registry
     model_entry = registry.get(new_item.params.model_key)
@@ -543,7 +546,8 @@ async def resubmit_item(queue_id: str, item_id: int, request: Request, prepend: 
 
 @router.put("/i/{item_id}/move_front")
 async def move_item_to_front(queue_id: str, item_id: int, request: Request):
-    """Move a pending queue item to the front of the queue."""
+    """Move a pending queue item to the front of the queue by bumping its
+    priority rank above every other tracked item (max + 1)."""
     queue = request.app.state.queue
     broadcaster = request.app.state.broadcaster
     moved = await queue.move_to_front(item_id)
@@ -601,7 +605,6 @@ def _queue_item_to_image_dict(item: QueueItem, model_name: str | None) -> dict:
         "request_serial_number": None,
         "gen_seq": None,  # legacy alias
         "created_at": item.created_at.isoformat() if item.created_at else None,
-        "priority": item.priority,
         "priority_value": item.priority_value,
         "tags": [],
     }

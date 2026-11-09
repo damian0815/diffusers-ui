@@ -20,15 +20,6 @@ async def test_enqueue_append_order(qm):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_prepend_goes_to_front(qm):
-    a = await qm.enqueue(QueueItem(params=make_params()))
-    b = await qm.enqueue(QueueItem(params=make_params()), prepend=True)
-    items = await qm.next_pending_batch_window(0)
-    assert items[0].item_id == b.item_id
-    assert items[1].item_id == a.item_id
-
-
-@pytest.mark.asyncio
 async def test_enqueue_orders_by_priority_value(qm):
     """Higher priority_value items are dequeued first; equal ranks stay FIFO."""
     a = await qm.enqueue(QueueItem(params=make_params(), priority_value=1))
@@ -39,12 +30,39 @@ async def test_enqueue_orders_by_priority_value(qm):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_higher_priority_runs_after_run_now_block(qm):
-    """A high-ranked plain item never jumps ahead of a run-now item."""
-    run_now = await qm.enqueue(QueueItem(params=make_params(), priority_value=1), prepend=True)
-    high = await qm.enqueue(QueueItem(params=make_params(), priority_value=9))
+async def test_move_to_front_bumps_priority_value(qm):
+    """move_to_front raises the item's rank to max+1, putting it at the head."""
+    high = await qm.enqueue(QueueItem(params=make_params(), priority_value=3))
+    a = await qm.enqueue(QueueItem(params=make_params(), priority_value=1))
+    b = await qm.enqueue(QueueItem(params=make_params(), priority_value=1))
+    assert await qm.move_to_front(b.item_id) is True
+    assert b.priority_value == high.priority_value + 1
     items = await qm.next_pending_batch_window(0)
-    assert [i.item_id for i in items] == [run_now.item_id, high.item_id]
+    assert [i.item_id for i in items] == [b.item_id, high.item_id, a.item_id]
+
+
+@pytest.mark.asyncio
+async def test_move_to_front_rejects_non_pending(qm):
+    item = await qm.enqueue(QueueItem(params=make_params()))
+    await qm.mark_processing(item)
+    assert await qm.move_to_front(item.item_id) is False
+    assert await qm.move_to_front(99999) is False
+
+
+@pytest.mark.asyncio
+async def test_requeue_items_restores_order_by_rank(qm):
+    """Requeued items re-enter PENDING and sort by their existing rank."""
+    a = await qm.enqueue(QueueItem(params=make_params(), priority_value=2))
+    b = await qm.enqueue(QueueItem(params=make_params(), priority_value=2))
+    # Drain the deque the way the worker does, then mark them processing.
+    await qm.next_pending_batch_window(0)
+    await qm.mark_processing(a)
+    await qm.mark_processing(b)
+    await qm.requeue_items([a, b])
+    assert a.status == ItemStatus.PENDING
+    assert b.status == ItemStatus.PENDING
+    items = await qm.next_pending_batch_window(0)
+    assert [i.item_id for i in items] == [a.item_id, b.item_id]
 
 
 @pytest.mark.asyncio
@@ -179,12 +197,13 @@ async def test_batch_window_preference_falls_back_to_fifo(qm):
 
 
 @pytest.mark.asyncio
-async def test_batch_window_preference_never_skips_priority(qm):
-    """A priority (run-now) item at the head wins over the model preference."""
-    priority = await qm.enqueue(QueueItem(params=make_params(model_key="model_a")), prepend=True)
-    await qm.enqueue(QueueItem(params=make_params(model_key="model_a")))
+async def test_batch_window_preference_never_skips_higher_rank(qm):
+    """A higher-ranked item at the head wins over the model preference."""
+    high = await qm.enqueue(QueueItem(params=make_params(model_key="model_b"), priority_value=5))
+    await qm.enqueue(QueueItem(params=make_params(model_key="model_a"), priority_value=1))
+    await qm.enqueue(QueueItem(params=make_params(model_key="model_a"), priority_value=1))
     items = await qm.next_pending_batch_window(0, limit=1, preferred_model_key="model_a")
-    assert items[0].item_id == priority.item_id
+    assert items[0].item_id == high.item_id
 
 
 @pytest.mark.asyncio

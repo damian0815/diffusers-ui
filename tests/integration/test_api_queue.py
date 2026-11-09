@@ -156,9 +156,16 @@ async def test_prune_queue(client):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_prepend(client):
-    data = await enqueue_one(client, prepend=True)
-    assert len(data["item_ids"]) == 1
+async def test_enqueue_high_priority_rank(client):
+    body = make_enqueue_body()
+    body["batch"]["priority"] = 2
+    resp = await client.post(
+        "/api/v1/queue/default/enqueue_batch", json=body,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    assert data["items"][0]["priority_value"] == 2
 
 
 @pytest.mark.asyncio
@@ -229,7 +236,7 @@ async def test_list_queue_metadata(client):
         assert key in data
     assert data["total"] == 1
     assert data["summary"]["pending"] >= 1
-    assert "priority" in data["items"][0]
+    assert "priority_value" in data["items"][0]
     assert "created_at" in data["items"][0]
 
 
@@ -295,28 +302,35 @@ async def test_list_queue_search_case_insensitive(client):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_prepend_priority_in_list(client):
-    data = await enqueue_one(client, prepend=True)
-    item_id = data["item_ids"][0]
-    resp = await client.get("/api/v1/queue/default/")
-    items = resp.json()["items"]
-    entry = next(i for i in items if i["item_id"] == item_id)
-    assert entry["priority"] is True
-    assert resp.json()["priority_count"] >= 1
+async def test_enqueue_ranked_item_reflects_in_list(client):
+    body = make_enqueue_body()
+    body["batch"]["priority"] = 3
+    resp = await client.post("/api/v1/queue/default/enqueue_batch", json=body)
+    item_id = resp.json()["items"][0]["item_id"]
+
+    data = (await client.get("/api/v1/queue/default/")).json()
+    entry = next(i for i in data["items"] if i["item_id"] == item_id)
+    assert entry["priority_value"] == 3
+    assert data["priority_count"] >= 1
 
 
 @pytest.mark.asyncio
-async def test_list_sorts_priority_first(client):
-    normal = await enqueue_one(client, prepend=False)
-    prepended = await enqueue_one(client, prepend=True)
+async def test_list_sorts_higher_rank_first(client):
+    normal = await enqueue_one(client)
+    boosted = await enqueue_one(client)
+    boosted_id = boosted["item_ids"][0]
 
-    resp = await client.get("/api/v1/queue/default/")
-    items = resp.json()["items"]
+    # Move the second item to the front — bumps its rank above the first.
+    resp = await client.put(f"/api/v1/queue/default/i/{boosted_id}/move_front")
+    assert resp.status_code == 200
+
+    data = (await client.get("/api/v1/queue/default/")).json()
+    items = data["items"]
     order = [i["item_id"] for i in items]
-    prepended_id = prepended["item_ids"][0]
     normal_id = normal["item_ids"][0]
-    assert order.index(prepended_id) < order.index(normal_id)
-    assert items[order.index(prepended_id)]["priority"] is True
+    assert order.index(boosted_id) < order.index(normal_id)
+    entry = items[order.index(boosted_id)]
+    assert entry["priority_value"] == 2  # max(1) + 1
 
 
 # ---------------------------------------------------------------------------

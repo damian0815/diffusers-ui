@@ -27,8 +27,10 @@ def group_into_batches(
     max_size: Union[int, Callable[[CriticalParams], int]] = 0,
 ) -> list[list[QueueItem]]:
     """
-    Group items by critical params, preserving queue order within each group.
-    Returns a list of groups; each group can be sent to the pipeline as one batch.
+    Group items by critical params *and priority rank*, preserving queue order
+    within each group.  Returns a list of groups; each group can be sent to
+    the pipeline as one batch.  Chunking by rank guarantees a batch never
+    mixes priority levels.
 
     Args:
         items:    flat list of pending QueueItems from the queue.
@@ -40,32 +42,21 @@ def group_into_batches(
                   empirical memory measurements.
 
     Example:
-        [A(512x512), B(768x768), C(512x512)] →
-        [[A, C], [B]]    (A and C share critical params)
+        [A(512x512, rank 1), B(768x768, rank 1), C(512x512, rank 2)] →
+        [[A], [B], [C]]    (A and C share params but not rank)
     """
-    seen: dict[CriticalParams, list[QueueItem]] = {}
+    seen: dict[tuple[CriticalParams, int], list[QueueItem]] = {}
     for item in items:
-        key = get_critical_params(item.params)
+        key = (get_critical_params(item.params), item.priority_value)
         seen.setdefault(key, []).append(item)
 
-    # ── Priority items: each runs as its own solo batch (no grouping) ──────────
-    # They are placed first so they execute before any normal-priority work that
-    # was already in the window.
-    priority_result: list[list[QueueItem]] = []
-    normal_result: list[list[QueueItem]] = []
+    result: list[list[QueueItem]] = []
+    for (crit, _rank), group in seen.items():
+        limit: int = max_size(crit) if callable(max_size) else max_size
+        if limit > 0 and len(group) > limit:
+            for i in range(0, len(group), limit):
+                result.append(group[i : i + limit])
+        else:
+            result.append(group)
 
-    for key, group in seen.items():
-        # Split the group into priority singles and normal chunks
-        for item in group:
-            if item.priority:
-                priority_result.append([item])
-        normal_group = [item for item in group if not item.priority]
-        if normal_group:
-            limit: int = max_size(key) if callable(max_size) else max_size
-            if limit > 0 and len(normal_group) > limit:
-                for i in range(0, len(normal_group), limit):
-                    normal_result.append(normal_group[i : i + limit])
-            else:
-                normal_result.append(normal_group)
-
-    return priority_result + normal_result
+    return result

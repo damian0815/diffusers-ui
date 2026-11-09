@@ -37,8 +37,10 @@ class PersistedQueueItem(Base):
     output_image_name = Column(String, nullable=True)
     error = Column(String, nullable=True)
 
+    # Legacy run-now flag from before priority_value-only ordering (bd-8ag).
+    # Kept in the schema for DB compatibility; no longer read or written.
     priority = Column(Boolean, nullable=False, default=False)
-    # Ordering rank (higher = earlier); does not affect the run-now block.
+    # Sole ordering rank (higher = earlier); FIFO by item_id within a rank.
     priority_value = Column(Integer, nullable=False, default=1)
 
     # LoRA metadata (JSON-encoded lists for backward compat)

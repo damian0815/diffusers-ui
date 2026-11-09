@@ -38,14 +38,15 @@ def filter_items(
 
 
 def sort_key(item: QueueItem) -> tuple:
-    """Canonical ordering key: run-now (prepend) items first, then descending
-    priority_value, then ascending item_id (= submission serial)."""
-    return (not item.priority, -item.priority_value, item.item_id)
+    """Canonical ordering key: descending priority_value, then ascending
+    item_id (= submission serial).  Ordering is driven solely by rank —
+    there is no separate run-now block."""
+    return (-item.priority_value, item.item_id)
 
 
 def sort_queue(items) -> list[QueueItem]:
-    """Run-now items first, then by priority rank (higher first), then item_id
-    (= submission serial) ascending within each rank."""
+    """Sort by priority rank (higher first), then item_id (= submission
+    serial) ascending within each rank."""
     return sorted(items, key=sort_key)
 
 
@@ -88,5 +89,5 @@ def paginate(items, offset, limit) -> tuple[list, bool]:
 
 
 def priority_count(items) -> int:
-    """Number of items with item.priority is True."""
-    return sum(1 for it in items if it.priority)
+    """Number of items ranked above the default (priority_value > 1)."""
+    return sum(1 for it in items if it.priority_value > 1)

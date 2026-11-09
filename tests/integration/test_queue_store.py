@@ -15,9 +15,9 @@ async def _make_session_factory(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_store_round_trips_priority_and_created_at(tmp_path):
-    """A priority item persists with priority=True and a created_at timestamp;
-    a plain item round-trips with priority=False."""
+async def test_store_round_trips_created_at(tmp_path):
+    """Every item round-trips with a created_at timestamp and a default
+    priority_value of 1; status updates round-trip too."""
     import backend.queue.models  # noqa: F401 — register ORM models
     from backend.gallery.db import Base
     from backend.queue.store import QueueStore
@@ -28,8 +28,8 @@ async def test_store_round_trips_priority_and_created_at(tmp_path):
 
     store = QueueStore(session_factory)
 
-    prepended = QueueItem(params=make_params(), priority=True)
-    await store.upsert(prepended)
+    boosted = QueueItem(params=make_params(), priority_value=2)
+    await store.upsert(boosted)
 
     normal = QueueItem(params=make_params())
     await store.upsert(normal)
@@ -38,10 +38,10 @@ async def test_store_round_trips_priority_and_created_at(tmp_path):
     assert len(items) == 2
 
     by_id = {it.item_id: it for it in items}
-    assert by_id[prepended.item_id].priority is True
-    assert by_id[normal.item_id].priority is False
+    assert by_id[boosted.item_id].priority_value == 2
+    assert by_id[normal.item_id].priority_value == 1
 
-    created = by_id[prepended.item_id].created_at
+    created = by_id[boosted.item_id].created_at
     assert created is not None
     age_s = (datetime.utcnow() - created).total_seconds()
     assert 0 <= age_s < 60
@@ -140,4 +140,31 @@ async def test_inline_migration_adds_priority_to_queue_items(tmp_path):
 
         # Idempotent — running again must not raise.
         await conn.run_sync(_apply_inline_migrations)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_legacy_priority_rows_load_as_ranked_items(tmp_path):
+    """DB-compat: rows persisted before the run-now boolean was removed
+    (priority=1) still load — the legacy column is simply ignored."""
+    import backend.queue.models  # noqa: F401 — register ORM models
+    from backend.gallery.db import Base
+    from backend.queue.store import QueueStore
+
+    engine, session_factory = await _make_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    store = QueueStore(session_factory)
+    item = QueueItem(params=make_params(), priority_value=3)
+    await store.upsert(item)
+    # Force the raw legacy flag onto the stored row (upsert no longer writes it).
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "UPDATE queue_items SET priority = 1 WHERE item_id = :iid"
+        ), {"iid": item.item_id})
+
+    loaded = {it.item_id: it for it in await store.load_all()}
+    assert loaded[item.item_id].priority_value == 3
+    assert not hasattr(loaded[item.item_id], "priority")
     await engine.dispose()

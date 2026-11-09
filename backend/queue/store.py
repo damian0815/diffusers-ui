@@ -49,7 +49,6 @@ class QueueStore:
                     prediction_type=item.params.prediction_type,
                     output_image_name=item.output_image_name,
                     error=item.error,
-                    priority=item.priority,
                     priority_value=item.priority_value,
                     lora_keys=json.dumps(item.params.lora_keys) if item.params.lora_keys else None,
                     lora_strengths=json.dumps(item.params.lora_strengths) if item.params.lora_strengths else None,
@@ -61,7 +60,6 @@ class QueueStore:
                 row.status = item.status.value
                 row.output_image_name = item.output_image_name
                 row.error = item.error
-                row.priority = item.priority
                 row.priority_value = item.priority_value
                 row.updated_at = now
 
@@ -118,13 +116,16 @@ def _row_to_domain(row: PersistedQueueItem) -> QueueItem:
         lora_strengths=json.loads(row.lora_strengths) if row.lora_strengths else [],
     )
     # Pass item_id explicitly so default_factory (_next_id) is NOT called.
+    # The legacy ``priority`` (run-now) column is ignored: ordering now comes
+    # from priority_value alone.  Rows from an older DB that were enqueued with
+    # priority=True but rank 1 keep rank 1; their original queue position is
+    # preserved by the ordered restore in main.py.
     return QueueItem(
         params=params,
         item_id=row.item_id,
         status=ItemStatus(row.status),
         output_image_name=row.output_image_name,
         error=row.error,
-        priority=bool(row.priority),
         priority_value=row.priority_value if row.priority_value is not None else 1,
         created_at=row.created_at,
     )

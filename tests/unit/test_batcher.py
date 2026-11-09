@@ -59,6 +59,17 @@ def test_three_different_models_three_groups():
     assert m1_group[1].item_id == c.item_id
 
 
+def test_different_priority_ranks_never_share_a_batch():
+    """A batch never mixes priority levels — same params, different rank."""
+    a = QueueItem(params=make_params(), priority_value=1)
+    b = QueueItem(params=make_params(), priority_value=2)
+    c = QueueItem(params=make_params(), priority_value=1)
+    groups = group_into_batches([a, b, c])
+    assert [g[0].priority_value for g in groups] == [1, 2]
+    assert {i.item_id for i in groups[0]} == {a.item_id, c.item_id}
+    assert groups[1] == [b]
+
+
 def test_get_critical_params_extracts_correctly():
     params = make_params(width=768, steps=30, cfg=9.0, model_key="xyz")
     cp = get_critical_params(params)

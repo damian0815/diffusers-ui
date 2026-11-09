@@ -124,11 +124,9 @@ class QueueItem:
     status: ItemStatus = ItemStatus.PENDING
     output_image_name: str | None = None
     error: str | None = None
-    # priority=True: item was enqueued to the front; skip batch window & run solo
-    # priority_value: higher numbers render/process earlier; FIFO by
-    # submission serial within equal priority.  (The run-now bool above is the
-    # "jump the queue entirely" switch; this only ranks normal queuing.)
-    priority: bool = False
+    # priority_value: the sole ordering rank — higher numbers render/process
+    # earlier; FIFO by submission serial within equal priority.  (There is no
+    # separate "run now" flag; move-to-front bumps this value.)
     priority_value: int = 1
 
     def __post_init__(self):

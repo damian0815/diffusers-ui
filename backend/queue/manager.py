@@ -42,22 +42,10 @@ class QueueManager:
         except Exception:
             logger.warning("Failed to persist queue item %d", item.item_id, exc_info=True)
 
-    async def enqueue(self, item: QueueItem, prepend: bool = False) -> QueueItem:
-        """Add an item to the queue. prepend=True puts it at the front."""
+    async def enqueue(self, item: QueueItem) -> QueueItem:
+        """Add an item to the queue, in priority order."""
         async with self._lock:
-            if prepend:
-                # Prepending implies run-now semantics; keep the flag in sync
-                # so the item joins the priority block even if constructed
-                # without it.
-                item.priority = True
-                # Insert after existing priority items so priority items
-                # are processed in FIFO order among themselves.
-                n = sum(1 for it in self._queue if it.priority)
-                self._queue.rotate(-n)
-                self._queue.appendleft(item)
-                self._queue.rotate(n)
-            else:
-                self._insert_in_priority_order(item)
+            self._insert_in_priority_order(item)
             self._all_items[item.item_id] = item
         await self._persist(item)
         self._new_item_event.set()
@@ -65,46 +53,33 @@ class QueueManager:
 
     def _insert_in_priority_order(self, item: QueueItem) -> None:
         """Insert an item so the deque stays ordered by
-        (descending priority_value, ascending item_id) within each block.
+        (descending priority_value, ascending item_id).
 
-        Run-now (priority=True) items hold the leading block; regular items
-        (priority=False) the trailing block.  Higher priority_value lands
-        closer to the head, so the worker's head-first pickup processes
-        items in priority order.
+        Ordering is driven solely by priority_value — higher priority_value
+        lands closer to the head, so the worker's head-first pickup processes
+        items in priority order.  Within one rank the deque keeps submission
+        order (FIFO) because new items always carry the largest item_id.
         """
         insert_at = len(self._queue)
         for idx in range(len(self._queue)):
-            other = self._queue[idx]
-            # Items in different blocks: priority items stay ahead.
-            if other.priority and not item.priority:
-                continue  # skip past run-now block
-            if not other.priority and item.priority:
-                # Reached the regular block while inserting a priority item.
-                insert_at = idx
-                break
-            # Same block: sort by priority_value descending.
-            if other.priority_value < item.priority_value:
+            if self._queue[idx].priority_value < item.priority_value:
                 insert_at = idx
                 break
         self._queue.insert(insert_at, item)
 
-    async def requeue_items(self, items: list[QueueItem], prepend: bool = True) -> None:
+    async def requeue_items(self, items: list[QueueItem]) -> None:
         """
         Reset *items* to PENDING and put them back in the queue.
 
-        Used after an OOM failure to retry at a smaller batch size.
-        When *prepend* is True (default) items are placed at the front so they
-        are picked up before any subsequently-enqueued work.
+        Used after an OOM failure to retry at a smaller batch size.  Items
+        re-enter in their original relative order, positioned by their existing
+        priority_value, so they are picked up before lower-ranked work.
         """
         async with self._lock:
-            ordered = list(reversed(items)) if prepend else items
-            for item in ordered:
+            for item in items:
                 item.status = ItemStatus.PENDING
                 item.error = None
-                if prepend:
-                    self._queue.appendleft(item)
-                else:
-                    self._queue.append(item)
+                self._insert_in_priority_order(item)
         for item in items:
             await self._persist(item)
         self._new_item_event.set()
@@ -112,6 +87,10 @@ class QueueManager:
     async def move_to_front(self, item_id: int) -> bool:
         """
         Move a *pending* item to the front of the queue.
+
+        Ordering is driven solely by priority_value, so this bumps the item's
+        rank above every other tracked item (max + 1) and re-inserts it in
+        priority order.
 
         Returns False if the item is not found or not in PENDING status.
         """
@@ -123,7 +102,11 @@ class QueueManager:
                 self._queue.remove(item)
             except ValueError:
                 return False  # item not in deque (shouldn't happen for PENDING)
-            self._queue.appendleft(item)
+            item.priority_value = max(
+                (it.priority_value for it in self._all_items.values()), default=0
+            ) + 1
+            self._insert_in_priority_order(item)
+        await self._persist(item)
         return True
 
     async def next_pending_batch_window(
@@ -138,9 +121,10 @@ class QueueManager:
         if ``abort_wait()`` was called (shutdown signal).
 
         If *preferred_model_key* is given, the first collected item is chosen
-        with ``_pop_preferred_pivot`` — a pending non-priority item that uses
-        that model, so the worker can minimise model swaps.  Falls back to the
-        queue head when no preferred item is found (or the head is priority).
+        with ``_pop_preferred_pivot`` — a pending item that uses that model and
+        shares the head's priority rank, so the worker can minimise model
+        swaps without reordering across priority levels.  Falls back to the
+        queue head when no preferred item is found.
         """
         await self._new_item_event.wait()
 
@@ -169,21 +153,28 @@ class QueueManager:
 
     def _pop_preferred_pivot(self, preferred_model_key: str) -> QueueItem | None:
         """
-        Pop the first pending non-priority item that uses *preferred_model_key*,
-        scanning at most ``PREFERRED_MODEL_SCAN_LIMIT`` slots from the head.
+        Pop the first pending item that uses *preferred_model_key*, scanning at
+        most ``PREFERRED_MODEL_SCAN_LIMIT`` slots from the head.
 
-        Returns None (caller falls back to the head) when the head is a
-        priority item or no preferred item is found in the scan window.
+        Ordering is driven solely by priority_value, so the scan may only
+        reorder *within* the leading priority rank.  As soon as it steps into a
+        lower-ranked block it gives up and returns None (the caller falls back
+        to the queue head), so a preferred model can never overtake a
+        higher-ranked item.
         """
         scan = min(PREFERRED_MODEL_SCAN_LIMIT, len(self._queue))
+        head_rank: int | None = None
         for i in range(scan):
             item = self._queue[i]
-            if item.status == ItemStatus.PENDING:
-                if item.priority:
-                    return None  # never reorder around a run-now item
-                if item.params.model_key == preferred_model_key:
-                    del self._queue[i]
-                    return item
+            if item.status != ItemStatus.PENDING:
+                continue
+            if head_rank is None:
+                head_rank = item.priority_value
+            if item.priority_value != head_rank:
+                return None  # left the leading rank block — don't reorder
+            if item.params.model_key == preferred_model_key:
+                del self._queue[i]
+                return item
         return None
 
     async def dequeue_matching(

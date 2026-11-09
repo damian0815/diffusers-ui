@@ -3,7 +3,7 @@
 const UI_STATE_KEY = 'diffusers-ui:app-state';
 const UI_STATE_SCALARS = [
   'prompt', 'negativePrompt', 'seed', 'width', 'height', 'steps', 'cfg',
-  'cfgRescale', 'sampler', 'predictionType', 'batchCount', 'enqueuePriority',
+  'cfgRescale', 'sampler', 'predictionType', 'batchCount', 'prependPriority',
   'autoSelectLatest',
   'showPreview', 'showInfoOverlay', 'lockAspectRatio', 'selectedAspectRatio',
   'sourceStrength', 'activeTab', 'localScanPath', 'modelKey', 'targetBoardId',
@@ -24,8 +24,9 @@ function app() {
     predictionType: 'default',
     modelKey: '',
     batchCount: 1,
-    enqueuePriority: 1,        // queue ordering rank for new submissions (higher = earlier)
+    prependPriority: 2,         // rank sent by the ⏫ prepend button (min 2; higher = earlier)
     targetBoardId: null,
+    targetBoardDropdownOpen: false,
     _galleries: [],
 
     // ---- UI state ----
@@ -58,7 +59,7 @@ function app() {
     queueSummary: {},            // unfiltered per-status counts from the API
     queueModels: [],             // unfiltered distinct models (drives the model <select>)
     queueTotal: 0,               // filtered count of the current query
-    queuePriorityCount: 0,       // filtered count of prepended (priority) items
+    queuePriorityCount: 0,       // filtered count of high-rank (priority_value > 1) items
     queueHasMore: false,
     _queuePage: 0,
     _queueLoading: false,
@@ -240,7 +241,7 @@ function app() {
               && this.rowMatchesFilters(data)) {
             this.queueDetails = [...this.queueDetails, data];
             this.queueTotal += 1;
-            if (data.priority) this.queuePriorityCount += 1;
+            if ((data.priority_value ?? 1) > 1) this.queuePriorityCount += 1;
           }
         } else if (event === 'queue_item_completed') {
           this._onItemCompleted(data.item_id, data.image_name);
@@ -345,7 +346,7 @@ function app() {
       }
 
       this.batchCount = Math.max(1, parseInt(this.batchCount) || 1);
-      this.enqueuePriority = Math.max(1, parseInt(this.enqueuePriority) || 1);
+      this.prependPriority = this._prependPriorityValue();
       if (this.lockAspectRatio) this._aspectRatioValue = this.width / this.height;
       this.selectedAspectRatio = this._detectAspectRatio(this.width, this.height);
     },
@@ -356,7 +357,7 @@ function app() {
         width: this.width, height: this.height, steps: this.steps, cfg: this.cfg,
         cfgRescale: this.cfgRescale, sampler: this.sampler,
         predictionType: this.predictionType, batchCount: this.batchCount,
-        enqueuePriority: this.enqueuePriority,
+        prependPriority: this.prependPriority,
         autoSelectLatest: this.autoSelectLatest, showPreview: this.showPreview,
         showInfoOverlay: this.showInfoOverlay, lockAspectRatio: this.lockAspectRatio,
         selectedAspectRatio: this.selectedAspectRatio, sourceStrength: this.sourceStrength,
@@ -477,6 +478,8 @@ function app() {
     // Generation
     // ----------------------------------------------------------------
 
+    // Enqueue the current settings. `prepend` (the ⏫ button / shift+Enter)
+    // enqueues at the bound prepend rank (min 2); plain Generate is rank 1.
     async generate(prepend = false) {
       this.snapResolution();
       if (!this.modelKey) { this._setError('Please select a model first.'); return; }
@@ -554,6 +557,10 @@ function app() {
            * this.batchCount;
     },
 
+    // Build the enqueue_batch request body.  `prepend` selects the rank the
+    // ⏫ button uses (its bound input, min 2); the plain Generate button
+    // always enqueues at rank 1.  Ordering is driven by `batch.priority` —
+    // there is no separate prepend flag in the API anymore.
     _buildEnqueueBody(prepend, promptOverride = null, negOverride = null) {
       const batch = {
         prompt: promptOverride ?? this.prompt,
@@ -566,7 +573,7 @@ function app() {
         model_key: this.modelKey,
         board_id: this.targetBoardId || this._currentBoardId,
         count: this.batchCount,
-        priority: this.enqueuePriority ?? 1,
+        priority: prepend ? this._prependPriorityValue() : 1,
       };
       if (this.sourceImage) {
         batch.init_image = this.sourceImage.name;
@@ -587,7 +594,14 @@ function app() {
           batch.lora_keys = this.activeLoras.map(l => l.filename);
           batch.lora_strengths = this.activeLoras.map(l => l.strength);
         }
-      return { prepend, batch };
+      return { batch };
+    },
+
+    // The rank behind the ⏫ button: an integer, never lower than 2 so a
+    // prepend always outranks plain (rank 1) work.
+    _prependPriorityValue() {
+      const n = parseInt(this.prependPriority, 10);
+      return Number.isFinite(n) ? Math.max(2, n) : 2;
     },
 
     async _pollItem(itemId) {
@@ -1209,7 +1223,7 @@ function app() {
       if (this.itemBusy[`resubmit:${itemId}`]) return;
       this.itemBusy[`resubmit:${itemId}`] = true;
       try {
-        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/resubmit?prepend=true`, { method: 'POST' });
+        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/resubmit`, { method: 'POST' });
         if (!resp.ok) throw new Error(await resp.text());
         const data = await resp.json();
         this.queueItems.push(data.item_id);
@@ -1395,8 +1409,8 @@ function app() {
       this.loadQueuePage({ mode: 'reset' });
     },
 
-    // Show the "Prepend" divider at the bottom of the last prepended row —
-    // only when regular (non-prepended) rows follow it.
+    // Show the "Prepend" divider at the bottom of the last high-rank
+    // (priority_value > 1) row — only when rank-1 rows follow it.
     isLastPriorityRow(idx) {
       return idx === this.queuePriorityCount - 1 && idx < this.queueDetails.length - 1;
     },
@@ -1454,7 +1468,7 @@ function app() {
 
     async resubmitItem(itemId) {
       try {
-        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/resubmit?prepend=true`, { method: 'POST' });
+        const resp = await fetch(`/api/v1/queue/default/i/${itemId}/resubmit`, { method: 'POST' });
         if (!resp.ok) throw new Error(await resp.text());
         const data = await resp.json();
         this.queueItems.push(data.item_id);

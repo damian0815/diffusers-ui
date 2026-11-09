@@ -170,7 +170,7 @@ InvokeAI-style `{a|b|c}` syntax produces cartesian product; each variant enqueue
 
 ## Queue system
 
-`QueueManager` (`backend/queue/manager.py`): in-memory `deque[QueueItem]` with `asyncio.Lock` + `_new_item_event` (asyncio.Event) for worker notification. Priority items inserted after existing priority items (FIFO within priority).
+`QueueManager` (`backend/queue/manager.py`): in-memory `deque[QueueItem]` with `asyncio.Lock` + `_new_item_event` (asyncio.Event) for worker notification. Ordering is driven solely by `priority_value` (descending; FIFO within a rank) — there is no prepend/run-now boolean. Batches never mix priority levels. `move_to_front` bumps the item's rank to max+1.
 - `next_pending_batch_window()`: waits for items, optional collection window
 - `dequeue_matching()`: scans entire queue for items matching a predicate (batch grouping)
 
