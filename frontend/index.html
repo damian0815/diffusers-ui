@@ -586,7 +586,8 @@
       <div class="panel-inner">
         <div id="gallery-header">
           <div class="row">
-            <div id="board-select" class="board-dropdown" @click.outside="boardDropdownOpen = false">
+            <div id="board-select" class="board-dropdown" x-show="mode === 'browse'"
+                 @click.outside="boardDropdownOpen = false">
               <button type="button" class="board-dropdown-trigger" @click="boardDropdownOpen = !boardDropdownOpen">
                 <template x-if="galleries.find(g => g.board_id === selectedBoardId)?.latest_image || galleries.find(g => g.board_id === selectedBoardId)?.latest_image_name">
                   <img class="board-dropdown-thumb" :src="`/api/v1/images/i/${galleries.find(g => g.board_id === selectedBoardId)?.latest_image || galleries.find(g => g.board_id === selectedBoardId)?.latest_image_name}/thumbnail`" alt="">
@@ -604,13 +605,18 @@
                 </template>
               </div>
             </div>
-            <button class="icon-btn" title="New gallery" @click="createGallery()">+</button>
+            <span class="compare-mode-label" x-show="mode === 'compare'">Compare across models</span>
+            <button class="icon-btn" title="New gallery" x-show="mode === 'browse'" @click="createGallery()">+</button>
             <button class="icon-btn" title="Gallery options"
                     @click="showOptions = !showOptions">⚙</button>
+            <button class="icon-btn" title="Compare across models"
+                    :disabled="!selectedImageName && images.length === 0"
+                    :class="{active: mode==='compare'}"
+                    @click="toggleCompareMode()">⇄</button>
             <button class="icon-btn" onclick="Layout.toggleRight()" title="Collapse gallery  ·  G">◀</button>
           </div>
 
-          <div class="row" style="margin-top:6px">
+          <div class="row" style="margin-top:6px" x-show="mode === 'browse'">
             <input type="text" x-model="search" placeholder="Search prompts…"
                    @input.debounce.400ms="resetAndLoad()">
             <span class="gallery-total" x-show="total > 0" x-text="`${total} images`"></span>
@@ -653,6 +659,50 @@
           </div>
         </div>
 
+        <!-- ── Compare-mode config (COMPARISON_GALLERY_MODE.md §5.2) ── -->
+        <div class="compare-config" x-show="mode === 'compare'">
+          <div class="compare-group">
+            <button type="button" class="compare-group-header" @click="toggleCompareGroup('matchOpen')">
+              <span class="compare-caret" x-text="compareConfig.matchOpen ? '▾' : '▸'"></span>
+              <span>Match by</span>
+            </button>
+            <div class="compare-group-body" x-show="compareConfig.matchOpen">
+              <template x-for="f in compareFieldOptions" :key="f.id">
+                <label class="checkbox-label">
+                  <input type="checkbox" :value="f.id" x-model="compareFields"
+                         @change="onCompareConfigChanged()">
+                  <span x-text="f.label"></span>
+                </label>
+              </template>
+            </div>
+          </div>
+          <div class="compare-group">
+            <button type="button" class="compare-group-header" @click="toggleCompareGroup('modelsOpen')">
+              <span class="compare-caret" x-text="compareConfig.modelsOpen ? '▾' : '▸'"></span>
+              <span>Models</span>
+            </button>
+            <div class="compare-group-body" x-show="compareConfig.modelsOpen">
+              <div class="compare-btn-row">
+                <button class="icon-btn sm" @click="compareSelectAllModels()">Select all</button>
+                <button class="icon-btn sm" @click="compareSelectNoneModels()">Select none</button>
+              </div>
+              <div class="compare-models-scroll">
+                <template x-for="m in compareAllModels" :key="m.model_key">
+                  <label class="checkbox-label compare-model-label" :class="{removed: m.registered === false}">
+                    <input type="checkbox" :value="m.model_key" x-model="compareModels"
+                           @change="onCompareConfigChanged()">
+                    <span class="compare-model-name" :title="m.model_name"
+                          x-text="m.registered === false ? `${m.model_name} (removed)` : m.model_name"></span>
+                    <span class="compare-model-count"
+                          x-text="m.image_count === 0 ? '(no images yet)' : `(${m.image_count})`"></span>
+                  </label>
+                </template>
+              </div>
+            </div>
+          </div>
+          <p class="compare-hint" x-text="loading ? 'Loading…' : `${total} matching images`"></p>
+        </div>
+
         <!-- Selection action bar — appears when ≥2 images are selected -->
         <div class="selection-bar" x-show="selectedImageNames.length > 1" x-transition>
           <span x-text="`${selectedImageNames.length} selected`"></span>
@@ -680,6 +730,8 @@
                 <img :src="`/api/v1/images/i/${img.image_name}/thumbnail`"
                      :alt="img.prompt" loading="lazy">
                 <span x-show="img.starred" class="star-badge">⭐</span>
+                <span class="thumb-model-badge" x-show="mode === 'compare'"
+                      :title="img.model_name" x-text="img.model_name"></span>
                 <div class="thumb-actions">
                   <button class="thumb-action-btn danger"
                           @click.stop="deleteImage(img.image_name)"

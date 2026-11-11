@@ -2,6 +2,20 @@
 
 const GALLERY_STATE_KEY = 'diffusers-ui:gallery-state';
 
+// The seven "Match by" checkboxes of comparison mode (COMPARISON_GALLERY_MODE.md §3.4).
+// `id` doubles as the canonical API field name; `model` maps to model_key server-side.
+const COMPARE_FIELD_OPTIONS = [
+  { id: 'prompt', label: 'Prompt' },
+  { id: 'negative_prompt', label: 'Negative prompt' },
+  { id: 'seed', label: 'Seed' },
+  { id: 'width', label: 'Width' },
+  { id: 'height', label: 'Height' },
+  { id: 'cfg', label: 'CFG' },
+  { id: 'model', label: 'Model' },
+];
+
+const COMPARE_DEFAULT_FIELDS = ['prompt', 'negative_prompt', 'seed', 'width', 'height', 'cfg'];
+
 function gallery() {
   return {
     galleries: [],
@@ -23,6 +37,21 @@ function gallery() {
     thumbsPerRow: 3,
     _dragSrcIdx: null,
     _pendingRestore: false,
+
+    // ── Comparison mode ──────────────────────────────────────────────────
+    mode: 'browse',                 // 'browse' | 'compare'
+    compareModelsPersisted: false,  // set by _restoreGalleryUiState; true iff a saved selection
+                                    //   exists — switches §3.2-A (first entry) vs §3.2-B (later)
+    compareRef: null,               // image_name of the reference image
+    compareFields: [...COMPARE_DEFAULT_FIELDS],  // 'model' unchecked by default (§2.3)
+    compareModels: [],              // model_keys checked (persisted; §3.2 rules)
+    compareKnownModels: [],         // model_keys seen at last compare-mode entry (persisted;
+                                    //   its absence in the blob marks "first entry ever")
+    compareAllModels: [],           // [{model_key, model_name, image_count, last_used, registered}]
+    compareConfig: { matchOpen: true, modelsOpen: true },  // collapsible groups
+    compareLoading: false,
+    _compareReloadTimer: null,      // debounced WS-triggered reload handle
+    compareFieldOptions: COMPARE_FIELD_OPTIONS,  // x-for can't see top-level consts
 
     // ── Multi-select ─────────────────────────────────────────────────────
     selectedImageNames: [],   // all highlighted thumbnails
@@ -74,7 +103,8 @@ function gallery() {
       });
       this.$watch('selectedImageName', () => this._saveGalleryState(this.selectedBoardId));
 
-      for (const f of ['selectedBoardId', 'search', 'sortBy', 'sortDir', 'starredFirst', 'thumbsPerRow']) {
+      for (const f of ['selectedBoardId', 'search', 'sortBy', 'sortDir', 'starredFirst', 'thumbsPerRow',
+                       'compareFields', 'compareModels', 'compareKnownModels', 'compareConfig']) {
         this.$watch(f, () => this._persistGalleryUiState());
       }
       window.addEventListener('pagehide', () => this._persistGalleryUiState(true));
@@ -99,6 +129,7 @@ function gallery() {
       window.addEventListener('navigate-board', async (e) => {
         const { boardId, imageName } = e.detail;
         if (!boardId || !imageName) return;
+        this.mode = 'browse';  // §3.6: board-scoped navigation always exits comparison mode
         this._isNavigating = true;
         this.selectedBoardId = boardId;
         this.$dispatch('select-image', { imageName: null });
@@ -229,6 +260,30 @@ function gallery() {
       if (typeof saved.starredFirst === 'boolean')   this.starredFirst = saved.starredFirst;
       const cols = parseInt(saved.thumbsPerRow);
       if (cols >= 1 && cols <= 8) this.thumbsPerRow = cols;
+
+      // Comparison mode (§5.1). `mode` itself is deliberately NOT persisted:
+      // after reload there is no guaranteed reference image, so the panel
+      // starts in browse mode; an ignore-mode rule also means a persisted
+      // 'compare' value from a malformed blob is harmless.
+      // A saved compare:models ARRAY — even empty — marks "not first entry ever".
+      this.compareModelsPersisted = Array.isArray(saved['compare:models']);
+      if (Array.isArray(saved['compare:models'])) {
+        this.compareModels = saved['compare:models'].filter(k => typeof k === 'string');
+      }
+      if (Array.isArray(saved['compare:known'])) {
+        this.compareKnownModels = saved['compare:known'].filter(k => typeof k === 'string');
+      }
+      if (Array.isArray(saved['compare:fields'])) {
+        // Ignore names from a future/older field set so they can't poison state.
+        const valid = COMPARE_FIELD_OPTIONS.map(o => o.id);
+        const fields = saved['compare:fields'].filter(f => valid.includes(f));
+        this.compareFields = fields.length ? fields : [...COMPARE_DEFAULT_FIELDS];
+      }
+      const groups = saved['compare:groups'];
+      if (groups && typeof groups === 'object') {
+        if (typeof groups.matchOpen === 'boolean')  this.compareConfig.matchOpen = groups.matchOpen;
+        if (typeof groups.modelsOpen === 'boolean') this.compareConfig.modelsOpen = groups.modelsOpen;
+      }
     },
 
     _persistGalleryUiState(flush = false) {
@@ -240,6 +295,18 @@ function gallery() {
         starredFirst: this.starredFirst,
         thumbsPerRow: this.thumbsPerRow,
       };
+      // The presence of `compare:models` in the blob is what marks "not the
+      // first entry ever" (§3.2-A/B) — so the compare keys may only be written
+      // once a selection actually exists (compareModelsPersisted is set by
+      // _applyCompareSelection on first entry). Writing them unconditionally
+      // from component defaults would make a pure-browsing session look
+      // configured and flip the first entry to rule B.
+      if (this.compareModelsPersisted) {
+        state['compare:fields'] = this.compareFields;
+        state['compare:models'] = this.compareModels;
+        state['compare:known'] = this.compareKnownModels;
+        state['compare:groups'] = this.compareConfig;
+      }
       if (flush) Persist.flush(GALLERY_STATE_KEY, state);
       else Persist.setDebounced(GALLERY_STATE_KEY, state);
     },
@@ -278,6 +345,136 @@ function gallery() {
       this._lastClickIdx = null;
     },
 
+    // ── Comparison mode (COMPARISON_GALLERY_MODE.md §5.1) ─────────────────
+
+    async toggleCompareMode() {
+      if (this.mode === 'browse') {
+        // Reference = displayed image, else the first loaded image of the board (§2.2).
+        const ref = this.selectedImageName || this.images[0]?.image_name;
+        if (!ref) return;
+        this.compareRef = ref;
+        this.mode = 'compare';
+        // Always re-fetch: counts/names change as models are used, renamed, installed.
+        await this._loadComparisonModels();
+        const anchorKey = await this._resolveAnchorKey(ref);
+        this._applyCompareSelection(anchorKey);
+        this.resetAndLoad();
+        // Persist so the updated selection/known-keys land even if the user
+        // touches no checkbox before exiting.
+        this._persistGalleryUiState();
+      } else {
+        this.mode = 'browse';
+        this.resetAndLoad();  // browse fetch path unchanged (§2.7)
+      }
+    },
+
+    async _loadComparisonModels() {
+      try {
+        const resp = await fetch('/api/v1/images/comparison_models');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        this.compareAllModels = data.models || [];
+      } catch (_) { /* keep the previous list; selection degrades to anchor-only */ }
+    },
+
+    async _resolveAnchorKey(imageName) {
+      // model_key of the reference image; loaded grid entries carry it, but if
+      // the image isn't on the current page (e.g. after navigate-board) fetch metadata.
+      const local = this.images.find(i => i.image_name === imageName);
+      if (local?.model_key) return local.model_key;
+      try {
+        const resp = await fetch(`/api/v1/images/i/${imageName}/metadata`);
+        if (resp.ok) return (await resp.json()).model_key || null;
+      } catch (_) {}
+      return null;
+    },
+
+    _applyCompareSelection(anchorKey) {
+      // §3.2. A: first entry ever → anchor ∪ last two added (registry order).
+      // §3.2. B: later entries → prune(persisted) ∪ {anchor} ∪ keys that are
+      // new since the persisted known-keys snapshot (auto-check freshly
+      // installed models once; manual unchecks of known models survive).
+      const firstEntry = !this.compareModelsPersisted;
+      const registeredKeys = this.compareAllModels
+        .filter(m => m.registered).map(m => m.model_key);
+      const lastTwoAdded = registeredKeys.slice(-2);
+      const allKeys = this.compareAllModels.map(m => m.model_key);
+      const dedupe = (list) => [...new Set(list.filter(k => k))];
+
+      if (firstEntry) {
+        this.compareModels = dedupe([anchorKey, ...lastTwoAdded]);
+      } else {
+        const kept = this.compareModels.filter(k => allKeys.includes(k));
+        const newlyAdded = allKeys.filter(k => !this.compareKnownModels.includes(k));
+        this.compareModels = dedupe([...kept, anchorKey, ...newlyAdded]);
+      }
+      this.compareKnownModels = allKeys;
+      this.compareModelsPersisted = true;
+    },
+
+    onCompareConfigChanged() {
+      // Any checkbox change re-queries the grid automatically (§2.4).
+      this.resetAndLoad();
+    },
+
+    toggleCompareGroup(which) {
+      // Replace (not mutate) so the compareConfig $watch fires and persists.
+      this.compareConfig = { ...this.compareConfig, [which]: !this.compareConfig[which] };
+      this._persistGalleryUiState();
+    },
+
+    compareSelectAllModels() {
+      this.compareModels = this.compareAllModels.map(m => m.model_key);
+      this.onCompareConfigChanged();
+    },
+
+    compareSelectNoneModels() {
+      this.compareModels = [];
+      this.onCompareConfigChanged();
+    },
+
+    _debouncedCompareReload() {
+      // New generation may or may not match the current hash — re-query
+      // instead of inserting optimistically (§2.8).
+      if (this._compareReloadTimer) clearTimeout(this._compareReloadTimer);
+      this._compareReloadTimer = setTimeout(() => {
+        this._compareReloadTimer = null;
+        if (this.mode === 'compare') this.resetAndLoad();
+      }, 800);
+    },
+
+    async loadComparePage() {
+      if (this.compareLoading) return;
+      this.loading = true;
+      this.compareLoading = true;
+      try {
+        const isFirstPage = this.offset === 0;
+        const params = new URLSearchParams({
+          reference: this.compareRef, offset: this.offset, limit: this.limit,
+        });
+        for (const f of this.compareFields) params.append('fields', f);
+        for (const k of this.compareModels) params.append('models', k);
+        const resp = await fetch(`/api/v1/images/compare?${params}`);
+        if (!resp.ok) throw new Error(resp.statusText);
+        const data = await resp.json();
+        const batch = data.items;
+        this.total = data.total;
+        this.images.push(...batch);
+        this.offset += batch.length;
+        this.hasMore = batch.length === this.limit;
+        // Highlight the reference like a normal selection on the first page
+        // (replaces per-board restore in compare mode).
+        if (isFirstPage && this.compareRef) {
+          const idx = this.images.findIndex(i => i.image_name === this.compareRef);
+          if (idx !== -1) this.selectImage(this.compareRef, idx);
+        }
+      } catch (e) {
+      } finally {
+        this.loading = false;
+        this.compareLoading = false;
+      }
+    },
+
     // ── Gallery position navigation ──────────────────────────────────────
 
     async jumpToOffset(offset) {
@@ -311,7 +508,10 @@ function gallery() {
     },
 
     async loadMore() {
-      if (this.loading || !this.hasMore || !this.selectedBoardId || this._isNavigating) return;
+      if (this.loading || !this.hasMore || this._isNavigating) return;
+      // Compare mode has no board; it queries the compare endpoint instead (§5.1).
+      if (this.mode === 'compare') { await this.loadComparePage(); return; }
+      if (!this.selectedBoardId) return;
       this.loading = true;
       try {
         const params = new URLSearchParams({
@@ -332,7 +532,9 @@ function gallery() {
       } catch (e) {
       } finally {
         this.loading = false;
-        if (this._pendingRestore) {
+        // Per-board restore is a browse-mode concept; in compare mode the
+        // reference is highlighted by loadComparePage() itself.
+        if (this._pendingRestore && this.mode === 'browse') {
           this._pendingRestore = false;
           this._restoreGalleryState();
         }
@@ -373,6 +575,7 @@ function gallery() {
     },
 
     async prependImage(imageName) {
+      if (this.mode === 'compare') return;  // may not match the hash — WS branch reloads instead
       if (this.images.some(i => i.image_name === imageName)) return;
       try {
         const resp = await fetch(`/api/v1/images/i/${imageName}/metadata`);
@@ -733,7 +936,11 @@ function gallery() {
           g.latest_image_name = data.image_name;
         }
         this._notifyGalleriesUpdated();
-        if (data.board_id === this.selectedBoardId &&
+        if (this.mode === 'compare') {
+          // The new image may not match the current identity hash — re-query
+          // (debounced) instead of inserting (§2.8).
+          this._debouncedCompareReload();
+        } else if (data.board_id === this.selectedBoardId &&
             !this.images.some(i => i.image_name === data.image_name)) {
           this._insertImageInOrder(data);
           this.offset += 1;

@@ -108,6 +108,54 @@ Return all image names in a gallery (unpaginated).
 { "image_names": ["abc.png", "def.png"] }
 ```
 
+### `GET /comparison_models`
+
+Candidate model list for gallery compare mode: registered models (from
+`models.json`, in insertion order = added order, LoRA entries excluded)
+followed by removed models that still have images in the DB (ordered by most
+recent image). Never-used registered models are still listed (`image_count: 0`).
+
+**Response**
+```json
+{
+  "models": [
+    { "model_key": "uuid", "model_name": "Model A", "registered": true, "image_count": 12, "last_used": "2026-11-10 09:12:03.123456" },
+    { "model_key": "uuid", "model_name": "Ghost Model", "registered": false, "image_count": 1, "last_used": "2026-11-08 22:01:44.500000" }
+  ]
+}
+```
+
+### `GET /compare`
+
+All images from any board whose identity hash equals the reference image's.
+Identity = SHA-256 of the canonical JSON of the selected `fields` (names:
+`prompt`, `negative_prompt`, `seed`, `width`, `height`, `cfg`, `model` — `model`
+maps to the stable `model_key`). Ordered by `request_serial_number DESC NULLS LAST`,
+paginated. Response mirrors `GET /` so the frontend grid is shared, plus
+`comparison_hash`/`fields`; items additionally carry `board_id`/`board_name`.
+
+**Query**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `reference` | str | required | `image_name` of the displayed image |
+| `fields` | repeated str | all except `model` | canonical field names to match on; empty set allowed |
+| `models` | repeated str | `[]` | model_keys to restrict to; empty ⇒ no model restriction |
+| `offset` | int | `0` | pagination offset |
+| `limit` | int | `50` | page size |
+
+**Response**
+```json
+{
+  "total": 3, "offset": 0, "limit": 50,
+  "items": [ /* image record dicts + board_id/board_name */ ],
+  "comparison_hash": "e3b0c4...",
+  "fields": ["prompt", "negative_prompt", "seed", "width", "height", "cfg"]
+}
+```
+
+Errors: `400` on unknown `fields` names (lists the offenders); `404` if `reference`
+does not exist.
+
 ### `POST /move`
 
 Move images between galleries.

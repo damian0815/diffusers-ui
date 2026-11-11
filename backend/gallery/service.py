@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.config import settings
 from backend.domain import QueueItem
+from backend.gallery.compare import comparison_hash
 from backend.gallery.models import Gallery, ImageRecord, Tag
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,98 @@ class GalleryService:
             .order_by(ImageRecord.created_at.desc())
         )
         return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    # Comparison mode (COMPARISON_GALLERY_MODE.md §4.2)
+    # ------------------------------------------------------------------
+
+    async def model_image_stats(self) -> dict[str, dict]:
+        """Per-model aggregates from the images table (DB side of §3.2).
+
+        SELECT model_key, COUNT(*), MAX(created_at) grouped by model_key.
+        The empty/NULL key is the img2img source board's rows and is skipped.
+        ``model_name`` resolves per key from that key's newest row — registry
+        renames change the value over time, so the latest snapshot wins.
+        ``last_used`` uses the same string format as ``_image_record_to_dict``.
+
+        Ordering is NOT this method's concern — the route orders registered
+        first / added-order per plan §3.2/§4.3.
+        """
+        agg = await self._session.execute(
+            select(
+                ImageRecord.model_key,
+                func.count().label("image_count"),
+                func.max(ImageRecord.created_at).label("last_used"),
+            )
+            .where(ImageRecord.model_key.isnot(None), ImageRecord.model_key != "")
+            .group_by(ImageRecord.model_key)
+        )
+        stats = {
+            row.model_key: {
+                "model_name": "",  # filled from the newest row's snapshot below
+                "image_count": row.image_count,
+                "last_used": (
+                    row.last_used.strftime("%Y-%m-%d %H:%M:%S.%f")
+                    if row.last_used
+                    else None
+                ),
+            }
+            for row in agg.all()
+        }
+        if stats:
+            # One query for the name snapshots; ascending created_at means the
+            # last write per key is the newest row (NULLs first so rows with a
+            # real timestamp are processed last and always win).
+            name_rows = await self._session.execute(
+                select(
+                    ImageRecord.model_key,
+                    ImageRecord.model_name,
+                    ImageRecord.created_at,
+                )
+                .where(ImageRecord.model_key.in_(list(stats)))
+                .order_by(ImageRecord.created_at.asc().nullsfirst())
+            )
+            for model_key, model_name, _ in name_rows.all():
+                stats[model_key]["model_name"] = model_name or ""
+        return stats
+
+    async def list_matching_images(
+        self,
+        reference: ImageRecord,
+        fields: list[str],
+        model_keys: list[str],
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ImageRecord], int, str]:
+        """Images across ALL boards whose hash of `fields` equals reference's hash.
+
+        Plan §3.5/§4.2: SQL orders by submission serial desc (newest first, same
+        as the default browse sort), then a Python pass filters by canonical hash.
+        Query-time hashing is deliberate — the metric is user-configurable so no
+        stored hash column can serve it (§3.1); single-user DB sizes make the scan
+        negligible.
+
+        Eager-loads tags AND gallery: ``_image_record_to_dict`` reads tags and the
+        compare route adds board_id/board_name; either would lazy-load in this
+        async context otherwise (same pattern as ``list_images``).
+
+        Returns ``(page_items, total_matches, reference_hash)``.
+        """
+        ref_hash = comparison_hash(reference, fields)
+
+        query = (
+            select(ImageRecord)
+            .options(selectinload(ImageRecord.tags), selectinload(ImageRecord.gallery))
+        )
+        if model_keys:
+            query = query.where(ImageRecord.model_key.in_(model_keys))
+        query = query.order_by(ImageRecord.request_serial_number.desc().nullslast())
+
+        result = await self._session.execute(query)
+        rows = list(result.scalars().all())
+
+        matches = [r for r in rows if comparison_hash(r, fields) == ref_hash]
+        return matches[offset:offset + limit], len(matches), ref_hash
 
     async def move_images(self, image_names: list[str], target_board_id: str) -> int:
         """Move images to a different gallery. Returns count of moved images."""

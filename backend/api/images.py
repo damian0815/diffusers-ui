@@ -5,12 +5,13 @@ import json
 from io import BytesIO
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image as PILImage
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.gallery.compare import validation_error_fields
 from backend.gallery.db import get_session
 from backend.gallery.service import GalleryService, GalleryNotFoundError, ImageNotFoundError
 
@@ -45,6 +46,95 @@ async def list_image_names(board_id: str, session=Depends(get_session)):
     service = GalleryService(session)
     names = await service.list_image_names(board_id)
     return {"image_names": names}
+
+
+@router.get("/comparison_models")
+async def comparison_models(request: Request, session=Depends(get_session)):
+    """Candidate model list for the gallery compare-mode "Models" group (§3.2).
+
+    Registered models first (registry iteration order = insertion order in
+    models.json = the only "added" signal; ModelEntry has no timestamp), then
+    a dimmed tail of model_keys that still have images but were deleted from
+    the registry ("removed"), ordered by most recent image.
+
+    Exists beside GET /api/v2/models/ because that route lists the registry
+    only — no per-model image counts and no DB orphans.
+    """
+    service = GalleryService(session)
+    stats = await service.model_image_stats()
+
+    models: list[dict] = []
+    registered_keys: set[str] = set()
+    for entry in request.app.state.registry.all():
+        if entry.kind == "lora":
+            continue  # LoRAs never render images; merges do, so they stay
+        registered_keys.add(entry.key)
+        stat = stats.get(entry.key)
+        models.append({
+            "model_key": entry.key,
+            "model_name": entry.name,  # registry name is rename-proof
+            "registered": True,
+            "image_count": stat["image_count"] if stat else 0,
+            "last_used": stat["last_used"] if stat else None,
+        })
+
+    # Orphan tail: keys with images but absent from the registry, newest first.
+    orphan_keys = [k for k in stats if k not in registered_keys]
+    orphan_keys.sort(key=lambda k: stats[k]["last_used"] or "", reverse=True)
+    for key in orphan_keys:
+        stat = stats[key]
+        models.append({
+            "model_key": key,
+            "model_name": stat["model_name"],
+            "registered": False,
+            "image_count": stat["image_count"],
+            "last_used": stat["last_used"],
+        })
+
+    return {"models": models}
+
+
+@router.get("/compare")
+async def compare_images(
+    reference: str,
+    fields: list[str] = Query(
+        default=["prompt", "negative_prompt", "seed", "width", "height", "cfg"]
+    ),
+    models: list[str] = Query(default=[]),
+    offset: int = 0,
+    limit: int = 50,
+    session=Depends(get_session),
+):
+    """All images (any board) whose identity hash equals the reference's (§4.3).
+
+    Identity = SHA-256 of the canonical JSON of the checked `fields` (§3.4),
+    restricted to `models` model_keys (empty ⇒ no model restriction). Ordered
+    by submission serial desc, paginated — response mirrors GET /api/v1/images/
+    so the frontend grid code is shared, plus comparison_hash/fields, and items
+    carry board_id/board_name because results span all boards.
+    """
+    unknown = validation_error_fields(fields)
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"unknown comparison fields: {', '.join(unknown)}"
+        )
+
+    service = GalleryService(session)
+    record = await service.get_image(reference)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Image {reference!r} not found")
+
+    items, total, ref_hash = await service.list_matching_images(
+        reference=record, fields=fields, model_keys=models, offset=offset, limit=limit,
+    )
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": [_comparison_item_to_dict(r) for r in items],
+        "comparison_hash": ref_hash,
+        "fields": fields,
+    }
 
 
 @router.get("/i/{image_name}/full")
@@ -221,4 +311,19 @@ def _image_record_to_dict(record) -> dict:
         "lora_keys": json.loads(record.lora_keys) if record.lora_keys else [],
         "lora_strengths": json.loads(record.lora_strengths) if record.lora_strengths else [],
     }
+
+
+def _comparison_item_to_dict(record) -> dict:
+    """Compare-endpoint item: the common dict plus the board it lives on.
+
+    Results span all boards, so the frontend needs board_id/board_name per
+    item. Kept out of ``_image_record_to_dict`` so browse-mode responses
+    (which already know their board) don't change shape for existing callers.
+    Requires ``record.gallery`` to be eager-loaded (list_matching_images does).
+    """
+    item = _image_record_to_dict(record)
+    gallery = record.gallery
+    item["board_id"] = gallery.board_id if gallery else None
+    item["board_name"] = gallery.name if gallery else None
+    return item
 
