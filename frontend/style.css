@@ -717,6 +717,19 @@ select option { background: var(--surface); }
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }
+
+/* Long board names must never push the icon buttons out of the panel
+ * (bd diffusers-ui-k75): the board selector claims its own full-width
+ * line, so +/⚙/⇄/◀ wrap onto a second, right-aligned line below it.
+ * justify-content applies per wrapped line, leaving the search row and
+ * the compare-mode label line untouched. */
+#gallery-header .row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+#gallery-header #board-select {
+  flex: 1 1 100%;
+}
 .gallery-options-row {
   display: flex; align-items: center; gap: 6px; padding: 2px 0;
 }
