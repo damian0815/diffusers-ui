@@ -121,7 +121,7 @@ The Generate-panel LoRA picker only sees loose `.safetensors`/`.pt` files direct
 
 Three tables in `backend/gallery/models.py`:
 - **`galleries`**: `id`, `board_id` (UUID, unique), `name`, `created_at`
-- **`images`**: `id`, `image_name` (UUID.png, unique), `gallery_id` (FK, nullable), all generation metadata (prompt, negative_prompt, seed, width, height, steps, cfg, cfg_rescale_multiplier, sampler, prediction_type, model_key, model_name), `request_serial_number`, img2img metadata (source_image, source_width, source_height, strength, crop_*), `starred`, `created_at`
+- **`images`**: `id`, `image_name` (UUID.jpg — or legacy UUID.png, unique), `gallery_id` (FK, nullable), all generation metadata (prompt, negative_prompt, seed, width, height, steps, cfg, cfg_rescale_multiplier, sampler, prediction_type, model_key, model_name), `request_serial_number`, img2img metadata (source_image, source_width, source_height, strength, crop_*), `starred`, `created_at`
 - **`tags`** + **`image_tags`** (many-to-many)
 
 `GalleryService` (`backend/gallery/service.py`):
@@ -130,7 +130,7 @@ Three tables in `backend/gallery/models.py`:
 - `move_images()`: moves images between boards
 - `_delete_image_files()`: removes from both `images/` and `images/thumbs/`
 
-Image file paths: `settings.images_dir / image_name` (full), `settings.thumbnails_dir / image_name` (256×256).
+Image file paths: `settings.images_dir / image_name` (full), `settings.thumbnails_dir / image_name` (256×256). Save format is `settings.image_format` (`"jpg"` default, `"png"` reverts) with `settings.jpeg_quality` (default 95); mixed `.png`/`.jpg` records coexist — serving derives the MIME type from the file extension.
 
 Schema migrations: inline in `backend/gallery/db.py:_apply_inline_migrations()` (checks for missing columns, adds via `ALTER TABLE`). Alembic setup exists but is unused for main tables.
 

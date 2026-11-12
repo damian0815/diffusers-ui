@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from io import BytesIO
+from pathlib import Path
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -137,13 +138,20 @@ async def compare_images(
     }
 
 
+def _media_type_for(path: Path) -> str:
+    """Map a stored image file's extension to a response MIME type."""
+    if path.suffix.lower() in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    return "image/png"
+
+
 @router.get("/i/{image_name}/full")
 async def get_image_full(image_name: str):
     """Serve the raw image file."""
     path = settings.images_dir / image_name
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Image {image_name!r} not found")
-    return FileResponse(str(path), media_type="image/png")
+    return FileResponse(str(path), media_type=_media_type_for(path))
 
 
 @router.get("/i/{image_name}/thumbnail")
@@ -155,7 +163,7 @@ async def get_thumbnail(image_name: str):
         path = settings.images_dir / image_name
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Thumbnail for {image_name!r} not found")
-    return FileResponse(str(path), media_type="image/png")
+    return FileResponse(str(path), media_type=_media_type_for(path))
 
 
 @router.get("/i/{image_name}/metadata")

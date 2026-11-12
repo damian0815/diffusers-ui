@@ -209,7 +209,10 @@ async def _cleanup_broken_images():
         all_known_images = {row[0] for row in result.all()}
 
         num_removed = 0
-        for image_path in list(settings.images_dir.glob('*.png')):
+        known_suffixes = {".png", ".jpg", ".jpeg"}
+        for image_path in sorted(settings.images_dir.iterdir()):
+            if not image_path.is_file() or image_path.suffix.lower() not in known_suffixes:
+                continue
             if image_path.name not in all_known_images:
                 logger.warning(f"Removing broken image file: {image_path}")
                 try:

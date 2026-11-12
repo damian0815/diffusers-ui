@@ -934,16 +934,26 @@ class PipelineWorker:
 
 
 def _save_image(pil_image: PILImage.Image) -> str:
-    """Save image + thumbnail; return the image filename."""
-    name = f"{uuid.uuid4().hex}.png"
+    """Save image + thumbnail; return the image filename.
+
+    Format is driven by ``settings.image_format`` ("jpg" or "png"); JPEG gets
+    ``settings.jpeg_quality`` and an RGB conversion (JPEG has no alpha).
+    """
+    is_png = settings.image_format.lower() == "png"
+    name = f"{uuid.uuid4().hex}.{'png' if is_png else 'jpg'}"
+    save_kwargs: dict = {} if is_png else {"quality": settings.jpeg_quality}
+
+    out = pil_image
+    if not is_png and out.mode != "RGB":
+        out = out.convert("RGB")
 
     settings.images_dir.mkdir(parents=True, exist_ok=True)
-    pil_image.save(settings.images_dir / name)
+    out.save(settings.images_dir / name, **save_kwargs)
 
-    thumb = pil_image.copy()
+    thumb = out.copy()
     thumb.thumbnail(settings.thumbnail_size)
     settings.thumbnails_dir.mkdir(parents=True, exist_ok=True)
-    thumb.save(settings.thumbnails_dir / name)
+    thumb.save(settings.thumbnails_dir / name, **save_kwargs)
 
     return name
 

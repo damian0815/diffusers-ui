@@ -65,3 +65,17 @@ async def test_full_image_served(client, tmp_path, monkeypatch):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("image/")
 
+
+@pytest.mark.asyncio
+async def test_media_type_matches_extension(client):
+    """Legacy .png files and new .jpg files each get the right MIME type."""
+    from backend.config import settings
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    PILImage.new("RGB", (64, 64), "red").save(settings.images_dir / "legacy.png")
+    PILImage.new("RGB", (64, 64), "red").save(settings.images_dir / "new.jpg")
+
+    resp = await client.get("/api/v1/images/i/legacy.png/full")
+    assert resp.headers["content-type"] == "image/png"
+    resp = await client.get("/api/v1/images/i/new.jpg/full")
+    assert resp.headers["content-type"] == "image/jpeg"
+

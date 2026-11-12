@@ -167,7 +167,7 @@ class GalleryService:
         orig_path = settings.images_dir / source_name
         if not orig_path.exists():
             raise FileNotFoundError(f"Source image {source_name!r} not found at {orig_path}")
-        copy_name = f"source_{uuid.uuid4().hex}.png"
+        copy_name = f"source_{uuid.uuid4().hex}{orig_path.suffix.lower() or '.png'}"
         shutil.copyfile(str(orig_path), str(settings.images_dir / copy_name))
 
         board_id = await self._ensure_img2img_board_same_session()
