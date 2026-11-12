@@ -25,6 +25,9 @@ dependencies = [
     "peft>=0.20.0",
 ]
 
+[tool.setuptools]
+py-modules = []
+
 [project.optional-dependencies]
 gpu = [
     # Install on CUDA machines for xformers memory-efficient attention:
