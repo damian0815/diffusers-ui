@@ -26,7 +26,6 @@ function app() {
     batchCount: 1,
     prependPriority: 2,         // rank sent by the ⏫ prepend button (min 2; higher = earlier)
     targetBoardId: null,
-    targetBoardDropdownOpen: false,
     _galleries: [],
 
     // ---- UI state ----

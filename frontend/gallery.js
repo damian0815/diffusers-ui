@@ -26,8 +26,6 @@ function gallery() {
     sortDir: 'desc',
     starredFirst: false,
     showOptions: false,
-    boardDropdownOpen: false,
-    moveBoardDropdownOpen: false,
     offset: 0,
     limit: 50,
     total: 0,

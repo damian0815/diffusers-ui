@@ -25,6 +25,7 @@ Tests use `pytest-asyncio` with `asyncio_mode = auto` (configured in `pyproject.
 - **Backend** — FastAPI with module-level singletons wired in `backend/main.py` via `app.state`. Key singletons: `QueueManager`, `ModelRegistry`, `PipelineLoader`, `PreviewBroadcaster`, `PipelineWorker`.
 - **No REST polling for queue updates** — the frontend relies on WebSocket events (`queue_item_completed`, `queue_item_cancelled`, etc.) pushed from `PreviewBroadcaster.broadcast_event()`. The `ws-gallery-event` DOM event bridges WS → Alpine.
 - **Alpine component registration** — always use `x-data="componentName()"` with parentheses (direct function call from a global `function` declaration). Do NOT use `Alpine.data()` registration with bare `x-data="componentName"`; the `alpine:init` event can fire before the registration callback runs, causing "not defined" errors.
+- **Gallery board dropdowns are shared** — all three custom pickers (Generate "Target Gallery", gallery header `#board-select`, move dialog) instantiate the same `boardDropdown(cfg)` factory (`frontend/boardDropdown.js`); the per-site markup is identical except the `x-data` config closures (`items`/`selected`/`onSelect`). Behavior: type-to-filter input autofocused on open, Esc clears filter then closes (stopPropagation'd so it never reaches the move-modal Esc handler in `gallery.js`), Enter picks the first match. The menu is `position: fixed`, placed from the trigger rect — never reintroduce `position: absolute` menus inside modals/scroll panels (`.modal-box { overflow: hidden }` truncates them).
 - **Cross-component state** — the `app()` and `gallery()` Alpine components talk exclusively via `window.dispatchEvent(new CustomEvent(...))`. Don't try to share data directly.
 
 ## Key files
@@ -43,6 +44,7 @@ Tests use `pytest-asyncio` with `asyncio_mode = auto` (configured in `pyproject.
 | `frontend/index.html` | Single-page HTML with Alpine `x-data`, `x-show`, `@click` etc. |
 | `frontend/app.js` | Main `app()` Alpine component (~960 lines) |
 | `frontend/gallery.js` | Gallery `gallery()` component |
+| `frontend/boardDropdown.js` | Shared `boardDropdown()` picker component (all three gallery dropdowns) |
 | `frontend/preview.js` | WebSocket client for live preview frames |
 | `frontend/style.css` | Design system (~1550 lines) |
 

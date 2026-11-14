@@ -10,6 +10,7 @@
   <script src="/ti.js"      defer></script>
   <script src="/layout.js"  defer></script>
   <script src="/persist.js" defer></script>
+  <script src="/boardDropdown.js" defer></script>
   <script src="/vendor/alpine.min.js" defer></script>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -134,23 +135,37 @@
 
            <div class="field-group" style="margin-top:12px">
               <label class="field-label">Target Gallery</label>
-             <div class="board-dropdown" @click.outside="targetBoardDropdownOpen = false">
-               <button type="button" class="board-dropdown-trigger" @click="targetBoardDropdownOpen = !targetBoardDropdownOpen">
-                 <template x-if="_galleries.find(g => g.board_id === targetBoardId)?.latest_image || _galleries.find(g => g.board_id === targetBoardId)?.latest_image_name">
-                   <img class="board-dropdown-thumb" :src="`/api/v1/images/i/${_galleries.find(g => g.board_id === targetBoardId)?.latest_image || _galleries.find(g => g.board_id === targetBoardId)?.latest_image_name}/thumbnail`" alt="">
+             <div class="board-dropdown" @click.outside="closeMenu()"
+                  x-data="boardDropdown({
+                   items: () => _galleries,
+                   selected: () => targetBoardId,
+                   onSelect: (id) => { targetBoardId = id; },
+                   placeholder: 'Select a gallery...',
+                   allowNone: true,
+                  })">
+               <button type="button" class="board-dropdown-trigger" x-ref="trigger" @click="toggle()">
+                 <template x-if="triggerThumbSrc()">
+                   <img class="board-dropdown-thumb" :src="triggerThumbSrc()" alt="">
                  </template>
-                 <span class="board-dropdown-label" x-text="_galleries.find(g => g.board_id === targetBoardId) ? `${_galleries.find(g => g.board_id === targetBoardId).board_name} (${_galleries.find(g => g.board_id === targetBoardId).image_count || 0})` : 'Select a gallery...'"></span>
+                 <span class="board-dropdown-label" x-text="triggerLabel()"></span>
                  <span class="board-dropdown-caret">▾</span>
                </button>
-               <div class="board-dropdown-menu" x-show="targetBoardDropdownOpen" x-transition>
-                 <button type="button" class="board-dropdown-item" :class="{active: !targetBoardId}" @click="targetBoardId = null; targetBoardDropdownOpen = false">Select a gallery...</button>
-                 <template x-for="g in _galleries" :key="g.board_id">
-                   <button type="button" class="board-dropdown-item" :class="{active: g.board_id === targetBoardId}" @click="targetBoardId = g.board_id; targetBoardDropdownOpen = false">
-                     <img x-show="g.latest_image || g.latest_image_name" class="board-dropdown-thumb" :src="`/api/v1/images/i/${g.latest_image || g.latest_image_name}/thumbnail`" alt="">
+               <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle">
+                 <div class="board-dropdown-search">
+                   <input type="text" x-ref="filterInput" x-model="filter"
+                     placeholder="Filter galleries..." @keydown="onFilterKeydown($event)">
+                 </div>
+                 <button type="button" class="board-dropdown-item" x-show="allowNone()"
+                   :class="{active: selectedId() === null}" @click="select(null)"
+                   x-text="placeholder()"></button>
+                 <template x-for="g in filteredItems()" :key="g.board_id">
+                   <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedId()}" @click="select(g.board_id)">
+                     <img x-show="thumbSrc(g)" class="board-dropdown-thumb" :src="thumbSrc(g)" alt="">
                      <span class="board-dropdown-item-name" x-text="g.board_name"></span>
                      <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
                    </button>
                  </template>
+                 <p class="board-dropdown-empty" x-show="filteredItems().length === 0">No matching galleries</p>
                </div>
              </div>
            </div>
@@ -587,22 +602,33 @@
         <div id="gallery-header">
           <div class="row">
             <div id="board-select" class="board-dropdown" x-show="mode === 'browse'"
-                 @click.outside="boardDropdownOpen = false">
-              <button type="button" class="board-dropdown-trigger" @click="boardDropdownOpen = !boardDropdownOpen">
-                <template x-if="galleries.find(g => g.board_id === selectedBoardId)?.latest_image || galleries.find(g => g.board_id === selectedBoardId)?.latest_image_name">
-                  <img class="board-dropdown-thumb" :src="`/api/v1/images/i/${galleries.find(g => g.board_id === selectedBoardId)?.latest_image || galleries.find(g => g.board_id === selectedBoardId)?.latest_image_name}/thumbnail`" alt="">
+              @click.outside="closeMenu()"
+                 x-data="boardDropdown({
+                  items: () => galleries,
+                  selected: () => selectedBoardId,
+                  onSelect: (id) => { selectedBoardId = id; onBoardChange(); },
+                  placeholder: 'Select gallery',
+                 })">
+              <button type="button" class="board-dropdown-trigger" x-ref="trigger" @click="toggle()">
+                <template x-if="triggerThumbSrc()">
+                  <img class="board-dropdown-thumb" :src="triggerThumbSrc()" alt="">
                 </template>
-                <span class="board-dropdown-label" x-text="`${galleries.find(g => g.board_id === selectedBoardId)?.board_name || 'Select gallery'} (${galleries.find(g => g.board_id === selectedBoardId)?.image_count || 0})`"></span>
+                <span class="board-dropdown-label" x-text="triggerLabel()"></span>
                 <span class="board-dropdown-caret">▾</span>
               </button>
-              <div class="board-dropdown-menu" x-show="boardDropdownOpen" x-transition>
-                <template x-for="g in galleries" :key="g.board_id">
-                  <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedBoardId}" @click="selectedBoardId = g.board_id; boardDropdownOpen = false; onBoardChange()">
-                    <img x-show="g.latest_image || g.latest_image_name" class="board-dropdown-thumb" :src="`/api/v1/images/i/${g.latest_image || g.latest_image_name}/thumbnail`" alt="">
+              <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle">
+                <div class="board-dropdown-search">
+                  <input type="text" x-ref="filterInput" x-model="filter"
+                    placeholder="Filter galleries..." @keydown="onFilterKeydown($event)">
+                </div>
+                <template x-for="g in filteredItems()" :key="g.board_id">
+                  <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedId()}" @click="select(g.board_id)">
+                    <img x-show="thumbSrc(g)" class="board-dropdown-thumb" :src="thumbSrc(g)" alt="">
                     <span class="board-dropdown-item-name" x-text="g.board_name"></span>
                     <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
                   </button>
                 </template>
+                <p class="board-dropdown-empty" x-show="filteredItems().length === 0">No matching galleries</p>
               </div>
             </div>
             <span class="compare-mode-label" x-show="mode === 'compare'">Compare across models</span>
@@ -788,22 +814,33 @@
           <div class="modal-body">
             <!-- Dropdown Select inside a conditional wrapper -->
             <div x-show="galleries.filter(g => g.board_id !== selectedBoardId).length > 0">
-              <div class="board-dropdown" @click.outside="moveBoardDropdownOpen = false">
-                <button type="button" class="board-dropdown-trigger" @click="moveBoardDropdownOpen = !moveBoardDropdownOpen">
-                  <template x-if="galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image || galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image_name">
-                    <img class="board-dropdown-thumb" :src="`/api/v1/images/i/${galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image || galleries.find(g => g.board_id === moveModal.targetBoardId)?.latest_image_name}/thumbnail`" alt="">
+              <div class="board-dropdown" @click.outside="closeMenu()"
+                   x-data="boardDropdown({
+                    items: () => galleries.filter(g => g.board_id !== selectedBoardId),
+                    selected: () => moveModal.targetBoardId,
+                    onSelect: (id) => { moveModal.targetBoardId = id; },
+                    placeholder: 'Select destination gallery...',
+                   })">
+                <button type="button" class="board-dropdown-trigger" x-ref="trigger" @click="toggle()">
+                  <template x-if="triggerThumbSrc()">
+                    <img class="board-dropdown-thumb" :src="triggerThumbSrc()" alt="">
                   </template>
-                  <span class="board-dropdown-label" x-text="galleries.find(g => g.board_id === moveModal.targetBoardId) ? `${galleries.find(g => g.board_id === moveModal.targetBoardId).board_name} (${galleries.find(g => g.board_id === moveModal.targetBoardId).image_count || 0})` : 'Select destination gallery...'"></span>
+                  <span class="board-dropdown-label" x-text="triggerLabel()"></span>
                   <span class="board-dropdown-caret">▾</span>
                 </button>
-                <div class="board-dropdown-menu" x-show="moveBoardDropdownOpen" x-transition>
-                  <template x-for="g in galleries.filter(g => g.board_id !== selectedBoardId)" :key="g.board_id">
-                    <button type="button" class="board-dropdown-item" :class="{active: g.board_id === moveModal.targetBoardId}" @click="moveModal.targetBoardId = g.board_id; moveBoardDropdownOpen = false">
-                      <img x-show="g.latest_image || g.latest_image_name" class="board-dropdown-thumb" :src="`/api/v1/images/i/${g.latest_image || g.latest_image_name}/thumbnail`" alt="">
+                <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle">
+                  <div class="board-dropdown-search">
+                    <input type="text" x-ref="filterInput" x-model="filter"
+                      placeholder="Filter galleries..." @keydown="onFilterKeydown($event)">
+                  </div>
+                  <template x-for="g in filteredItems()" :key="g.board_id">
+                    <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedId()}" @click="select(g.board_id)">
+                      <img x-show="thumbSrc(g)" class="board-dropdown-thumb" :src="thumbSrc(g)" alt="">
                       <span class="board-dropdown-item-name" x-text="g.board_name"></span>
                       <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
                     </button>
                   </template>
+                  <p class="board-dropdown-empty" x-show="filteredItems().length === 0">No matching galleries</p>
                 </div>
               </div>
             </div>
