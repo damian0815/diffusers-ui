@@ -217,4 +217,38 @@ describe('gallery state', () => {
     expect(g.starredFirst).toBe(false);
     expect(g.thumbsPerRow).toBe(3);
   });
+
+  it('round-trips the remembered move destination', () => {
+    const g = window.gallery();
+    g._moveTargetBoardId = 'b9';
+    g._persistGalleryUiState(true);
+
+    const g2 = window.gallery();
+    g2._restoreGalleryUiState();
+    expect(g2._moveTargetBoardId).toBe('b9');
+  });
+
+  it('openMoveModal pre-selects a remembered destination that still exists', () => {
+    const g = window.gallery();
+    g.galleries = [{ board_id: 'b1' }, { board_id: 'b2' }];
+    g.selectedBoardId = 'b1';
+    g._moveTargetBoardId = 'b2';
+    g.openMoveModal();
+    expect(g.moveModal.open).toBe(true);
+    expect(g.moveModal.targetBoardId).toBe('b2');
+  });
+
+  it('openMoveModal ignores a stale or current-board destination', () => {
+    const g = window.gallery();
+    g.galleries = [{ board_id: 'b1' }, { board_id: 'b2' }];
+    g.selectedBoardId = 'b1';
+
+    g._moveTargetBoardId = 'gone';   // no longer exists
+    g.openMoveModal();
+    expect(g.moveModal.targetBoardId).toBeNull();
+
+    g._moveTargetBoardId = 'b1';     // the board we're currently viewing
+    g.openMoveModal();
+    expect(g.moveModal.targetBoardId).toBeNull();
+  });
 });

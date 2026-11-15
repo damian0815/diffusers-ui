@@ -150,22 +150,21 @@
                  <span class="board-dropdown-label" x-text="triggerLabel()"></span>
                  <span class="board-dropdown-caret">▾</span>
                </button>
-               <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle">
+               <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle" x-ref="menu">
                  <div class="board-dropdown-search">
-                   <input type="text" x-ref="filterInput" x-model="filter"
-                     placeholder="Filter galleries..." @keydown="onFilterKeydown($event)">
+                   <input type="text" x-ref="filterInput" x-model="filter" placeholder="Filter galleries..."
+                     @input="resetHighlight()" @keydown="onFilterKeydown($event)">
                  </div>
-                 <button type="button" class="board-dropdown-item" x-show="allowNone()"
-                   :class="{active: selectedId() === null}" @click="select(null)"
-                   x-text="placeholder()"></button>
-                 <template x-for="g in filteredItems()" :key="g.board_id">
-                   <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedId()}" @click="select(g.board_id)">
-                     <img x-show="thumbSrc(g)" class="board-dropdown-thumb" :src="thumbSrc(g)" alt="">
-                     <span class="board-dropdown-item-name" x-text="g.board_name"></span>
-                     <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
+                 <template x-for="(opt, idx) in visibleOptions()" :key="opt.board_id ?? 'none'">
+                   <button type="button" class="board-dropdown-item"
+                     :class="{active: opt.board_id === selectedId(), highlighted: idx === highlight}"
+                     @mousedown.prevent @click="select(opt.board_id)" @mouseenter="highlight = idx">
+                     <img x-show="thumbSrc(opt)" class="board-dropdown-thumb" :src="thumbSrc(opt)" alt="">
+                     <span class="board-dropdown-item-name" x-text="opt.board_name"></span>
+                     <span class="board-dropdown-item-count" x-show="opt.board_id" x-text="`${opt.image_count || 0} images`"></span>
                    </button>
                  </template>
-                 <p class="board-dropdown-empty" x-show="filteredItems().length === 0">No matching galleries</p>
+                 <p class="board-dropdown-empty" x-show="visibleOptions().length === 0">No matching galleries</p>
                </div>
              </div>
            </div>
@@ -602,12 +601,12 @@
         <div id="gallery-header">
           <div class="row">
             <div id="board-select" class="board-dropdown" x-show="mode === 'browse'"
-              @click.outside="closeMenu()"
+                 @click.outside="closeMenu()"
                  x-data="boardDropdown({
-                  items: () => galleries,
-                  selected: () => selectedBoardId,
-                  onSelect: (id) => { selectedBoardId = id; onBoardChange(); },
-                  placeholder: 'Select gallery',
+                   items: () => galleries,
+                   selected: () => selectedBoardId,
+                   onSelect: (id) => { selectedBoardId = id; onBoardChange(); },
+                   placeholder: 'Select gallery',
                  })">
               <button type="button" class="board-dropdown-trigger" x-ref="trigger" @click="toggle()">
                 <template x-if="triggerThumbSrc()">
@@ -616,19 +615,21 @@
                 <span class="board-dropdown-label" x-text="triggerLabel()"></span>
                 <span class="board-dropdown-caret">▾</span>
               </button>
-              <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle">
+              <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle" x-ref="menu">
                 <div class="board-dropdown-search">
-                  <input type="text" x-ref="filterInput" x-model="filter"
-                    placeholder="Filter galleries..." @keydown="onFilterKeydown($event)">
+                  <input type="text" x-ref="filterInput" x-model="filter" placeholder="Filter galleries..."
+                    @input="resetHighlight()" @keydown="onFilterKeydown($event)">
                 </div>
-                <template x-for="g in filteredItems()" :key="g.board_id">
-                  <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedId()}" @click="select(g.board_id)">
-                    <img x-show="thumbSrc(g)" class="board-dropdown-thumb" :src="thumbSrc(g)" alt="">
-                    <span class="board-dropdown-item-name" x-text="g.board_name"></span>
-                    <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
+                <template x-for="(opt, idx) in visibleOptions()" :key="opt.board_id ?? 'none'">
+                  <button type="button" class="board-dropdown-item"
+                    :class="{active: opt.board_id === selectedId(), highlighted: idx === highlight}"
+                    @mousedown.prevent @click="select(opt.board_id)" @mouseenter="highlight = idx">
+                    <img x-show="thumbSrc(opt)" class="board-dropdown-thumb" :src="thumbSrc(opt)" alt="">
+                    <span class="board-dropdown-item-name" x-text="opt.board_name"></span>
+                    <span class="board-dropdown-item-count" x-show="opt.board_id" x-text="`${opt.image_count || 0} images`"></span>
                   </button>
                 </template>
-                <p class="board-dropdown-empty" x-show="filteredItems().length === 0">No matching galleries</p>
+                <p class="board-dropdown-empty" x-show="visibleOptions().length === 0">No matching galleries</p>
               </div>
             </div>
             <span class="compare-mode-label" x-show="mode === 'compare'">Compare across models</span>
@@ -828,19 +829,21 @@
                   <span class="board-dropdown-label" x-text="triggerLabel()"></span>
                   <span class="board-dropdown-caret">▾</span>
                 </button>
-                <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle">
+                <div class="board-dropdown-menu" x-show="open" x-transition :style="menuStyle" x-ref="menu">
                   <div class="board-dropdown-search">
-                    <input type="text" x-ref="filterInput" x-model="filter"
-                      placeholder="Filter galleries..." @keydown="onFilterKeydown($event)">
+                    <input type="text" x-ref="filterInput" x-model="filter" placeholder="Filter galleries..."
+                      @input="resetHighlight()" @keydown="onFilterKeydown($event)">
                   </div>
-                  <template x-for="g in filteredItems()" :key="g.board_id">
-                    <button type="button" class="board-dropdown-item" :class="{active: g.board_id === selectedId()}" @click="select(g.board_id)">
-                      <img x-show="thumbSrc(g)" class="board-dropdown-thumb" :src="thumbSrc(g)" alt="">
-                      <span class="board-dropdown-item-name" x-text="g.board_name"></span>
-                      <span class="board-dropdown-item-count" x-text="`${g.image_count || 0} images`"></span>
+                  <template x-for="(opt, idx) in visibleOptions()" :key="opt.board_id ?? 'none'">
+                    <button type="button" class="board-dropdown-item"
+                      :class="{active: opt.board_id === selectedId(), highlighted: idx === highlight}"
+                      @mousedown.prevent @click="select(opt.board_id)" @mouseenter="highlight = idx">
+                      <img x-show="thumbSrc(opt)" class="board-dropdown-thumb" :src="thumbSrc(opt)" alt="">
+                      <span class="board-dropdown-item-name" x-text="opt.board_name"></span>
+                      <span class="board-dropdown-item-count" x-show="opt.board_id" x-text="`${opt.image_count || 0} images`"></span>
                     </button>
                   </template>
-                  <p class="board-dropdown-empty" x-show="filteredItems().length === 0">No matching galleries</p>
+                  <p class="board-dropdown-empty" x-show="visibleOptions().length === 0">No matching galleries</p>
                 </div>
               </div>
             </div>

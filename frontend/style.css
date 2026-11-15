@@ -2240,5 +2240,7 @@ select option { background: var(--surface); }
 }
 .board-dropdown-item:hover { background: rgba(255,255,255,0.08); }
 .board-dropdown-item.active { background: rgba(100,140,255,0.25); }
+/* Keyboard highlight. Outline (not background) so it composes with .active. */
+.board-dropdown-item.highlighted { outline: 1px solid rgba(100,140,255,0.8); outline-offset: -1px; }
 .board-dropdown-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-dropdown-item-count { opacity: 0.6; font-size: 0.85em; }

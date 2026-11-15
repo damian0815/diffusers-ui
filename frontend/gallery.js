@@ -64,6 +64,10 @@ function gallery() {
 
     // ── Move modal ───────────────────────────────────────────────────────
     moveModal: { open: false, targetBoardId: null },
+    // Last gallery the user moved images to. `moveModal.targetBoardId` is
+    // reset on every open, so the remembered destination lives here and is
+    // pre-selected (when still valid) by openMoveModal().
+    _moveTargetBoardId: null,
 
     // ── Regenerate modal ────────────────────────────────────────────────
     regenModal: {
@@ -102,7 +106,8 @@ function gallery() {
       this.$watch('selectedImageName', () => this._saveGalleryState(this.selectedBoardId));
 
       for (const f of ['selectedBoardId', 'search', 'sortBy', 'sortDir', 'starredFirst', 'thumbsPerRow',
-                       'compareFields', 'compareModels', 'compareKnownModels', 'compareConfig']) {
+                       'compareFields', 'compareModels', 'compareKnownModels', 'compareConfig',
+                       '_moveTargetBoardId']) {
         this.$watch(f, () => this._persistGalleryUiState());
       }
       window.addEventListener('pagehide', () => this._persistGalleryUiState(true));
@@ -258,6 +263,7 @@ function gallery() {
       if (typeof saved.starredFirst === 'boolean')   this.starredFirst = saved.starredFirst;
       const cols = parseInt(saved.thumbsPerRow);
       if (cols >= 1 && cols <= 8) this.thumbsPerRow = cols;
+      if (typeof saved['move:target'] === 'string') this._moveTargetBoardId = saved['move:target'];
 
       // Comparison mode (§5.1). `mode` itself is deliberately NOT persisted:
       // after reload there is no guaranteed reference image, so the panel
@@ -292,6 +298,7 @@ function gallery() {
         sortDir: this.sortDir,
         starredFirst: this.starredFirst,
         thumbsPerRow: this.thumbsPerRow,
+        'move:target': this._moveTargetBoardId,
       };
       // The presence of `compare:models` in the blob is what marks "not the
       // first entry ever" (§3.2-A/B) — so the compare keys may only be written
@@ -740,7 +747,13 @@ function gallery() {
 
     openMoveModal() {
       this.ctxMenu.open = false;
-      this.moveModal = { open: true, targetBoardId: null };
+      // Pre-select the last destination the user moved to, if it still exists
+      // and isn't the board currently being viewed (which isn't a destination).
+      const remembered = this._moveTargetBoardId;
+      const valid = remembered
+        && remembered !== this.selectedBoardId
+        && this.galleries.some(g => g.board_id === remembered);
+      this.moveModal = { open: true, targetBoardId: valid ? remembered : null };
     },
 
     closeMoveModal() {
@@ -772,6 +785,7 @@ function gallery() {
           this.$dispatch('select-image', { imageName: null, fromGallery: true });
         }
         this.selectedImageNames = [];
+        this._moveTargetBoardId = targetBoardId;   // remember for next time
       } catch (err) {
         alert(`Move failed: ${err.message}`);
       } finally {

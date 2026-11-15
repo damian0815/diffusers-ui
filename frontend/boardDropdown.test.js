@@ -20,7 +20,11 @@ function makeDropdown(overrides = {}) {
 }
 
 function keyEvent(key) {
-  const e = { key, preventDefault() {}, stopPropagation() { e.stopped = true; } };
+  const e = {
+    key,
+    preventDefault() { e.prevented = true; },
+    stopPropagation() { e.stopped = true; },
+  };
   return e;
 }
 
@@ -168,5 +172,135 @@ describe('positionMenu — viewport-safe placement', () => {
     dd.positionMenu();
     expect(dd.menuStyle.top).toBe('534px');
     expect(dd.menuStyle.maxHeight).toBe('226px');
+  });
+});
+
+describe('visibleOptions — clear row handling', () => {
+  it('prepends the clear row only when allowNone and no filter', () => {
+    const { dd } = makeDropdown({ allowNone: true });
+    expect(dd.visibleOptions().map(o => o.board_id)).toEqual([null, 'b1', 'b2', 'b3']);
+    dd.filter = 'port';
+    // The clear row is a state, not a search hit — hidden while filtering.
+    expect(dd.visibleOptions().map(o => o.board_id)).toEqual(['b3']);
+  });
+
+  it('omits the clear row when allowNone is false', () => {
+    const { dd } = makeDropdown();
+    expect(dd.visibleOptions().map(o => o.board_id)).toEqual(['b1', 'b2', 'b3']);
+  });
+});
+
+describe('initialHighlight — open on the current selection', () => {
+  it('points at the selected item', () => {
+    const { dd, host } = makeDropdown();
+    host.selected = 'b3';
+    expect(dd.initialHighlight()).toBe(2);
+  });
+
+  it('falls back to the first row when nothing is selected', () => {
+    const { dd } = makeDropdown();
+    expect(dd.initialHighlight()).toBe(0);
+  });
+
+  it('points at the clear row when allowNone and nothing is selected', () => {
+    const { dd } = makeDropdown({ allowNone: true });
+    expect(dd.visibleOptions()[dd.initialHighlight()].board_id).toBeNull();
+  });
+
+  it('is -1 when there is nothing to show', () => {
+    const { dd } = makeDropdown({ items: () => [] });
+    expect(dd.initialHighlight()).toBe(-1);
+  });
+
+  it('openMenu seeds the highlight from the selection', () => {
+    const { dd, host } = makeDropdown();
+    host.selected = 'b2';
+    dd.openMenu();
+    expect(dd.highlight).toBe(1);
+  });
+});
+
+describe('moveHighlight — clamped arrow movement', () => {
+  it('moves down and up by one, clamped at both ends (no wrap)', () => {
+    const { dd } = makeDropdown();
+    dd.highlight = 0;
+    dd.moveHighlight(1);
+    expect(dd.highlight).toBe(1);
+    dd.moveHighlight(1);
+    dd.moveHighlight(1);          // past the end
+    expect(dd.highlight).toBe(2);
+    dd.moveHighlight(-1);
+    expect(dd.highlight).toBe(1);
+    dd.moveHighlight(-5);         // past the start
+    expect(dd.highlight).toBe(0);
+  });
+
+  it('starts from the top when nothing was highlighted', () => {
+    const { dd } = makeDropdown();
+    dd.highlight = -1;
+    dd.moveHighlight(1);
+    expect(dd.highlight).toBe(1);
+  });
+
+  it('does nothing when there are no options', () => {
+    const { dd } = makeDropdown({ items: () => [] });
+    dd.highlight = -1;
+    dd.moveHighlight(1);
+    expect(dd.highlight).toBe(-1);
+  });
+});
+
+describe('resetHighlight — after the filter changes', () => {
+  it('returns to the current selection when the filter is cleared', () => {
+    const { dd, host } = makeDropdown();
+    host.selected = 'b3';
+    dd.filter = '';
+    dd.resetHighlight();
+    expect(dd.highlight).toBe(2);
+  });
+
+  it('jumps to the top match while filtering', () => {
+    const { dd } = makeDropdown();
+    dd.filter = 'port';
+    dd.resetHighlight();
+    expect(dd.highlight).toBe(0);
+  });
+
+  it('clears the highlight when nothing matches', () => {
+    const { dd } = makeDropdown();
+    dd.filter = 'zzz';
+    dd.resetHighlight();
+    expect(dd.highlight).toBe(-1);
+  });
+});
+
+describe('onFilterKeydown — arrows and Enter', () => {
+  it('ArrowDown/ArrowUp move the highlight and prevent default', () => {
+    const { dd } = makeDropdown();
+    dd.openMenu();
+    const down = keyEvent('ArrowDown');
+    dd.onFilterKeydown(down);
+    expect(dd.highlight).toBe(1);
+    expect(down.prevented).toBe(true);
+    dd.onFilterKeydown(keyEvent('ArrowUp'));
+    expect(dd.highlight).toBe(0);
+  });
+
+  it('Enter selects the highlighted item, not necessarily the first', () => {
+    const { dd, host } = makeDropdown();
+    dd.openMenu();                 // highlight 0 (nothing selected)
+    dd.onFilterKeydown(keyEvent('ArrowDown'));   // → 1 (b2)
+    dd.onFilterKeydown(keyEvent('Enter'));
+    expect(host.selected).toBe('b2');
+    expect(dd.open).toBe(false);
+  });
+
+  it('Enter does nothing when the highlight is cleared (no matches)', () => {
+    const { dd, host } = makeDropdown();
+    dd.openMenu();
+    dd.filter = 'zzz';
+    dd.resetHighlight();           // → -1
+    dd.onFilterKeydown(keyEvent('Enter'));
+    expect(host.selectedHistory).toEqual([]);
   });
 });
