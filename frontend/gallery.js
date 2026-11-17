@@ -764,6 +764,9 @@ function gallery() {
       const { targetBoardId } = this.moveModal;
       if (!targetBoardId) return;
       const names = [...this.selectedImageNames];
+      const movedSet = new Set(names);
+      const selectedWasMoved = movedSet.has(this.selectedImageName);
+      const selectedIdx = this.images.findIndex(i => i.image_name === this.selectedImageName);
       this._moving = true;
       this.moveModal.open = false;
       try {
@@ -777,14 +780,25 @@ function gallery() {
           }),
         });
         if (!resp.ok) throw new Error(await resp.text());
-        this.images = this.images.filter(i => !names.includes(i.image_name));
+        this.images = this.images.filter(i => !movedSet.has(i.image_name));
         this.offset = Math.max(0, this.offset - names.length);
         this.total  = Math.max(0, this.total  - names.length);
-        if (names.includes(this.selectedImageName)) {
-          this.selectedImageName = null;
-          this.$dispatch('select-image', { imageName: null, fromGallery: true });
+        if (selectedWasMoved) {
+          this.selectedImageNames = [];
+          this._lastClickIdx = null;
+          if (this.images.length === 0) {
+            this.selectedImageName = null;
+            this.$dispatch('select-image', { imageName: null, fromGallery: true });
+          } else {
+            const nextIdx = Math.min(selectedIdx, this.images.length - 1);
+            this.selectImage(this.images[nextIdx].image_name, nextIdx);
+          }
+        } else {
+          this.selectedImageNames = [];
+          this._lastClickIdx = null;
+          const curIdx = this.images.findIndex(i => i.image_name === this.selectedImageName);
+          if (curIdx !== -1) this._lastClickIdx = curIdx;
         }
-        this.selectedImageNames = [];
         this._moveTargetBoardId = targetBoardId;   // remember for next time
       } catch (err) {
         alert(`Move failed: ${err.message}`);
@@ -1002,13 +1016,24 @@ function gallery() {
         if (data.source_board_id === this.selectedBoardId) {
           const movedSet = new Set(data.image_names);
           const removedCount = this.images.filter(i => movedSet.has(i.image_name)).length;
+          const selectedWasMoved = movedSet.has(this.selectedImageName);
+          const selectedIdx = this.images.findIndex(i => i.image_name === this.selectedImageName);
           this.images = this.images.filter(i => !movedSet.has(i.image_name));
           this.offset = Math.max(0, this.offset - removedCount);
           this.total  = Math.max(0, this.total  - removedCount);
           this.selectedImageNames = this.selectedImageNames.filter(n => !movedSet.has(n));
-          if (movedSet.has(this.selectedImageName)) {
-            this.selectedImageName = null;
-            this.$dispatch('select-image', { imageName: null, fromGallery: true });
+          if (selectedWasMoved) {
+            this._lastClickIdx = null;
+            if (this.images.length === 0) {
+              this.selectedImageName = null;
+              this.$dispatch('select-image', { imageName: null, fromGallery: true });
+            } else {
+              const nextIdx = Math.min(selectedIdx, this.images.length - 1);
+              this.selectImage(this.images[nextIdx].image_name, nextIdx);
+            }
+          } else {
+            const curIdx = this.images.findIndex(i => i.image_name === this.selectedImageName);
+            this._lastClickIdx = curIdx !== -1 ? curIdx : null;
           }
         }
       }
